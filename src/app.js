@@ -5,6 +5,7 @@ import io from 'socket.io-client';
 import axios from 'axios';
 import './app.css';
 
+<<<<<<< HEAD
 // Detect if we're on mobile and use appropriate API URL
 const getApiUrl = () => {
   if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
@@ -14,6 +15,9 @@ const getApiUrl = () => {
 };
 
 const API_URL = getApiUrl();
+=======
+const API_URL = 'https://anonym-backend.onrender.com';
+>>>>>>> c50246e05ac78551557cc526df5b418efccddd1b
 let socket;
 
 function App() {
