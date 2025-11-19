@@ -1028,6 +1028,8 @@ function App() {
             <p className="feature">🔒 Completely anonymous</p>
             <p className="feature">💬 Real-time messaging</p>
             <p className="feature">🚀 No account needed</p>
+            <p className="feature"><a href="https://ochat.fun/about.html">📃 More about Ochat </a></p>
+
           </div>
         </div>
       </div>
