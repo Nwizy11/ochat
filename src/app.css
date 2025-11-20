@@ -68,7 +68,7 @@ body {
   gap: 8px;
   padding: 10px 18px;
   /* background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); */
-  color: white;
+  color: black;
   border: none;
   border-radius: 12px;
   font-size: 14px;
@@ -94,9 +94,9 @@ body {
   top: 50%;
   left: 12px;
   transform: translateY(-50%);
-  width: 8px;
-  height: 8px;
-  background: #22c55e;
+  width: 15px;
+  height: 15px;
+  background: #26db81;
   border-radius: 50%;
   animation: pulse 2s ease-in-out infinite;
 }

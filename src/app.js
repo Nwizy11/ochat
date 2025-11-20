@@ -3,9 +3,14 @@ import React, { useState, useEffect, useRef } from 'react';
 import { MessageCircle, Send, Copy, Check, Plus, User, List, Bell } from 'lucide-react';
 import io from 'socket.io-client';
 import axios from 'axios';
+import ReactGA from 'react-ga4';
 import './app.css';
 
-const API_URL = 'https://anonym-backend.onrender.com';
+// Initialize Google Analytics
+const TRACKING_ID = 'G-FE98DD5ZS8'; // Replace with your GA4 Measurement ID
+ReactGA.initialize(TRACKING_ID);
+
+const API_URL = "https://anonym-backend.onrender.com";
 let socket;
 
 function App() {
@@ -73,9 +78,38 @@ function App() {
     return document.visibilityState === 'visible';
   };
 
+  // Helper functions for read status and unread count - DEFINED EARLY
+  const getReadStatus = (convId) => {
+    try {
+      const readStatus = JSON.parse(localStorage.getItem('chat_read_status') || '{}');
+      return readStatus[convId] || null;
+    } catch (error) {
+      console.error('Error getting read status:', error);
+      return null;
+    }
+  };
+
+  const calculateUnreadCount = (conv) => {
+    const readStatus = getReadStatus(conv.id);
+    if (!readStatus) {
+      return conv.messages ? conv.messages.filter(m => !m.isCreator).length : 0;
+    }
+    
+    const totalMessages = conv.messages?.length || 0;
+    if (totalMessages <= readStatus.readUpToMessageCount) {
+      return 0;
+    }
+    
+    const newMessages = conv.messages.slice(readStatus.readUpToMessageCount);
+    return newMessages.filter(m => !m.isCreator).length;
+  };
+
   // Initialize socket connection
   useEffect(() => {
     console.log('🔌 Initializing socket connection to:', API_URL);
+    
+    // Track page view on mount
+    ReactGA.send({ hitType: "pageview", page: window.location.pathname + window.location.search });
     
     socket = io(API_URL, {
       reconnection: true,
@@ -360,31 +394,33 @@ function App() {
       const isMessageFromOther = newMessage.isCreator !== isCreator;
       
       if (convId === activeConvId && currentConv) {
-        const previousMessageCount = currentConv.messages?.length || 0;
-        
-        setCurrentConv(prev => {
-          const updatedConv = {
-            ...prev,
-            messages: [...(prev.messages || []), newMessage],
-            lastMessage: newMessage.timestamp
-          };
-          console.log('💾 Updated conversation with new message:', updatedConv.messages.length);
-          return updatedConv;
-        });
-        
-        // Play sound if message is from other person and page is not visible
-        if (isMessageFromOther && !isPageVisible()) {
-          console.log('🔔 Playing notification sound - page not visible');
-          playNotificationSound();
+        // Only add the message if it's from the other person
+        // (we already added our own messages optimistically)
+        if (isMessageFromOther) {
+          setCurrentConv(prev => {
+            const updatedConv = {
+              ...prev,
+              messages: [...(prev.messages || []), newMessage],
+              lastMessage: newMessage.timestamp
+            };
+            console.log('💾 Updated conversation with new message:', updatedConv.messages.length);
+            return updatedConv;
+          });
           
-          // Show browser notification if permission granted
-          if ('Notification' in window && Notification.permission === 'granted') {
-            new Notification('New Message', {
-              body: newMessage.text.substring(0, 50) + (newMessage.text.length > 50 ? '...' : ''),
-              icon: '/favicon.ico',
-              tag: 'chat-message',
-              requireInteraction: false
-            });
+          // Play sound if message is from other person and page is not visible
+          if (!isPageVisible()) {
+            console.log('🔔 Playing notification sound - page not visible');
+            playNotificationSound();
+            
+            // Show browser notification if permission granted
+            if ('Notification' in window && Notification.permission === 'granted') {
+              new Notification('New Message', {
+                body: newMessage.text.substring(0, 50) + (newMessage.text.length > 50 ? '...' : ''),
+                icon: '/favicon.ico',
+                tag: 'chat-message',
+                requireInteraction: false
+              });
+            }
           }
         }
       }
@@ -539,7 +575,7 @@ function App() {
       socket.off('new-conversation', handleNewConversation);
       socket.off('conversation-updated', handleConversationUpdated);
     };
-  }, [socket, myLinkId, view, activeConvId]);
+  }, [socket, myLinkId, view, activeConvId, calculateUnreadCount]);
 
   // Auto scroll to bottom
   useEffect(() => {
@@ -593,6 +629,13 @@ function App() {
       });
       
       setConversations(convsWithUnread);
+      
+      // Track event
+      ReactGA.event({
+        category: 'Chat',
+        action: 'Create New Link',
+        label: 'Creator'
+      });
       
       console.log('✅ Chat link created');
     } catch (error) {
@@ -649,6 +692,13 @@ function App() {
       return;
     }
     
+    // Track event
+    ReactGA.event({
+      category: 'Chat',
+      action: 'Join with Link',
+      label: 'Anonymous User'
+    });
+    
     window.location.href = `/?link=${joinLinkId}`;
   };
 
@@ -702,31 +752,6 @@ function App() {
     } catch (error) {
       console.error('Error saving read status:', error);
     }
-  };
-
-  const getReadStatus = (convId) => {
-    try {
-      const readStatus = JSON.parse(localStorage.getItem('chat_read_status') || '{}');
-      return readStatus[convId] || null;
-    } catch (error) {
-      console.error('Error getting read status:', error);
-      return null;
-    }
-  };
-
-  const calculateUnreadCount = (conv) => {
-    const readStatus = getReadStatus(conv.id);
-    if (!readStatus) {
-      return conv.messages ? conv.messages.filter(m => !m.isCreator).length : 0;
-    }
-    
-    const totalMessages = conv.messages?.length || 0;
-    if (totalMessages <= readStatus.readUpToMessageCount) {
-      return 0;
-    }
-    
-    const newMessages = conv.messages.slice(readStatus.readUpToMessageCount);
-    return newMessages.filter(m => !m.isCreator).length;
   };
 
   const loadMyChatHistory = () => {
@@ -820,6 +845,19 @@ function App() {
     }
     
     const messageText = message.trim();
+    const tempMessage = {
+      text: messageText,
+      timestamp: Date.now(),
+      isCreator: isCreator
+    };
+    
+    // Immediately add message to UI (optimistic update)
+    setCurrentConv(prev => ({
+      ...prev,
+      messages: [...(prev.messages || []), tempMessage],
+      lastMessage: tempMessage.timestamp
+    }));
+    
     setMessage('');
     
     socket.emit('send-message', {
@@ -829,6 +867,13 @@ function App() {
     });
     
     socket.emit('stop-typing', { convId: activeConvId });
+    
+    // Track message sent
+    ReactGA.event({
+      category: 'Chat',
+      action: 'Send Message',
+      label: isCreator ? 'Creator' : 'Anonymous User'
+    });
     
     if (!isCreator) {
       updateChatHistoryActivity(activeConvId);
@@ -858,6 +903,13 @@ function App() {
         .then(() => {
           setCopied(true);
           setTimeout(() => setCopied(false), 2000);
+          
+          // Track link copy
+          ReactGA.event({
+            category: 'Chat',
+            action: 'Copy Link',
+            label: 'Share Link'
+          });
         })
         .catch(() => {
           copyToClipboardFallback(fullLink);
@@ -951,14 +1003,14 @@ function App() {
               title="Return to active chat"
             >
               {/* <MessageCircle size={20} /> */}
-              {/* <span>Active Chat</span> */}
+              {/* <span>Chats</span> */}
             </button>
           )}
 
           <div className="logo-container">
             <MessageCircle size={48} color="#667eea" />
           </div>
-          <h1 className="title">OChat</h1>
+          <h1 className="title">Anonymous Chat</h1>
           <p className="subtitle">Chat anonymously with anyone, no sign-up required</p>
           
           <button onClick={createNewLink} className="primary-button" disabled={loading}>
