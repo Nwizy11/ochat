@@ -19,7 +19,7 @@ ReactGA.initialize(TRACKING_ID);
 // };
 
 const API_URL = "https://anonym-backend.onrender.com";
-let socket; 
+let socket;
 
 function App() {
   const [view, setView] = useState('loading'); // Start with loading state
