@@ -7,18 +7,18 @@ import ReactGA from 'react-ga4';
 import './app.css';
 
 // Initialize Google Analytics
-const TRACKING_ID = 'G-XXXXXXXXXX'; // Replace with your GA4 Measurement ID
+const TRACKING_ID = 'G-FE98DD5ZS8'; // Replace with your GA4 Measurement ID
 ReactGA.initialize(TRACKING_ID);
 
 // Detect if we're on mobile and use appropriate API URL
-const getApiUrl = () => {
-  if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
-    return 'http://localhost:5000';
-  }
-  return `http://${window.location.hostname}:5000`;
-};
+// const getApiUrl = () => {
+//   if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+//     return 'http://localhost:5000';
+//   }
+//   return `http://${window.location.hostname}:5000`;
+// };
 
-const API_URL = getApiUrl();
+const API_URL = "https://anonym-backend.onrender.com"
 let socket;
 
 function App() {
@@ -1239,8 +1239,8 @@ function App() {
               className="active-chat-button"
               title="Return to active chat"
             >
-              <MessageCircle size={20} />
-              <span>Active Chat</span>
+              {/* <MessageCircle size={20} />
+              <span>Active Chat</span> */}
             </button>
           )}
 
@@ -1317,6 +1317,7 @@ function App() {
             <p className="feature">🔒 Completely anonymous</p>
             <p className="feature">💬 Real-time messaging</p>
             <p className="feature">🚀 No account needed</p>
+            <p className="feature"><a href="https://ochat.fun/about.html">📃 More about Ochat </a></p>
           </div>
         </div>
       </div>
