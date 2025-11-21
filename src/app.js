@@ -400,48 +400,76 @@ function App() {
       if (existingChat) {
         console.log('♻️ Restoring conversation:', existingChat.convId);
         
-        // Load from localStorage first
+        // Load from localStorage first for instant display
         const cachedConv = loadConversationFromStorage(existingChat.convId);
-        if (cachedConv) {
-          console.log('📂 Loading cached messages first:', cachedConv.messages.length);
-          setActiveConvId(existingChat.convId);
-          setIsCreator(false);
+        
+        setActiveConvId(existingChat.convId);
+        setIsCreator(false);
+        
+        if (cachedConv && cachedConv.messages && cachedConv.messages.length > 0) {
+          console.log('📂 Setting cached conversation immediately:', cachedConv.messages.length, 'messages');
           setCurrentConv(cachedConv);
           setView('chat');
         }
         
         try {
-          // Fetch from server
+          // Fetch from server for any new messages
           const response = await axios.get(`${API_URL}/api/conversations/${existingChat.convId}`);
           const { conversation } = response.data;
           
-          console.log('📦 Server returned conversation:', conversation);
+          console.log('📦 Server returned conversation:', conversation.messages?.length, 'messages');
           
-          setActiveConvId(existingChat.convId);
-          setIsCreator(false);
-          
-          // Merge and deduplicate messages
-          const cachedMessages = cachedConv?.messages || [];
-          const serverMessages = conversation.messages || [];
-          const allMessages = [...cachedMessages, ...serverMessages];
-          const mergedMessages = deduplicateMessages(allMessages);
-          
-          const convData = {
-            id: existingChat.convId,
-            linkId: conversation.linkId,
-            messages: mergedMessages,
-            createdAt: conversation.createdAt,
-            lastMessage: conversation.lastMessage
-          };
-          
-          setCurrentConv(convData);
-          setView('chat');
-          
-          // Save merged data
-          saveConversationToStorage(convData);
+          // Only update if we got new messages from server
+          if (cachedConv && cachedConv.messages) {
+            const serverMessages = conversation.messages || [];
+            
+            // Check if server has more messages than cache
+            if (serverMessages.length > cachedConv.messages.length) {
+              console.log('📥 Server has new messages, merging...');
+              const allMessages = [...cachedConv.messages, ...serverMessages];
+              const mergedMessages = deduplicateMessages(allMessages);
+              
+              const convData = {
+                id: existingChat.convId,
+                linkId: conversation.linkId,
+                messages: mergedMessages,
+                createdAt: conversation.createdAt,
+                lastMessage: conversation.lastMessage
+              };
+              
+              setCurrentConv(convData);
+              saveConversationToStorage(convData);
+            } else {
+              console.log('✅ Cache is up to date, no need to merge');
+              // Still set view to chat if not already
+              if (!cachedConv) {
+                setCurrentConv({
+                  id: existingChat.convId,
+                  linkId: conversation.linkId,
+                  messages: conversation.messages || [],
+                  createdAt: conversation.createdAt,
+                  lastMessage: conversation.lastMessage
+                });
+              }
+            }
+          } else {
+            // No cache, use server data
+            const convData = {
+              id: existingChat.convId,
+              linkId: conversation.linkId,
+              messages: conversation.messages || [],
+              createdAt: conversation.createdAt,
+              lastMessage: conversation.lastMessage
+            };
+            
+            setCurrentConv(convData);
+            setView('chat');
+            saveConversationToStorage(convData);
+          }
           
           updateChatHistoryActivity(existingChat.convId);
           
+          // Join conversation socket room
           setTimeout(() => {
             if (socket && socket.connected) {
               console.log('🔌 Joining conversation room:', existingChat.convId);
@@ -511,18 +539,38 @@ function App() {
       
       if (activeConvId) {
         setCurrentConv(prev => {
-          // Merge cached messages with server messages and deduplicate
+          // If we already have messages loaded (from cache), just deduplicate with server messages
           const cachedMessages = prev?.messages || [];
-          const serverMessages = messages || [];
-          const allMessages = [...cachedMessages, ...serverMessages];
-          const mergedMessages = deduplicateMessages(allMessages);
           
+          // If we have cached messages, don't replace them - just merge new ones
+          if (cachedMessages.length > 0) {
+            const serverMessages = messages || [];
+            const allMessages = [...cachedMessages, ...serverMessages];
+            const mergedMessages = deduplicateMessages(allMessages);
+            
+            // Only update if there are actually new messages
+            if (mergedMessages.length > cachedMessages.length) {
+              console.log('📥 Merging new server messages with cache');
+              const updated = {
+                ...prev,
+                id: activeConvId,
+                messages: mergedMessages
+              };
+              return updated;
+            }
+            
+            // No new messages, keep current state
+            console.log('✅ No new messages, keeping cached version');
+            return prev;
+          }
+          
+          // No cached messages, use server messages directly
+          console.log('📥 No cache, loading from server');
           const updated = {
             ...prev,
             id: activeConvId,
-            messages: mergedMessages
+            messages: messages || []
           };
-          console.log('💾 Updated currentConv with deduplicated messages:', updated);
           return updated;
         });
       }
