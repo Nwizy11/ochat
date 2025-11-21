@@ -1,4 +1,4 @@
-// src/App.js - FIXED: No duplicate messages on reload
+// src/App.js - FIXED: No duplicate messages on reconnect
 import React, { useState, useEffect, useRef } from 'react';
 import { MessageCircle, Send, Copy, Check, Plus, User, List } from 'lucide-react';
 import io from 'socket.io-client';
@@ -34,8 +34,11 @@ function App() {
   const typingTimeoutRef = useRef(null);
   const audioContextRef = useRef(null);
   const reconnectAttempts = useRef(0);
-  const pendingMessages = useRef([]);
-  const hasLoadedMessages = useRef(false); // NEW: Track if we've loaded messages
+  
+  // CRITICAL FIX: Track sent messages by unique ID to prevent re-sending
+  const sentMessageIds = useRef(new Set());
+  const pendingMessages = useRef(new Map()); // Map of messageId -> message data
+  const hasLoadedMessages = useRef(false);
 
   // Initialize audio context
   useEffect(() => {
@@ -99,16 +102,26 @@ function App() {
     return newMessages.filter(m => !m.isCreator).length;
   };
 
-  // IMPROVED: Better deduplication with unique message IDs
+  // IMPROVED: Better deduplication with message ID tracking
   const deduplicateMessages = (messages) => {
-    const seen = new Set();
+    const seen = new Map(); // Use Map to track by ID
+    
     return messages.filter(msg => {
-      // Create unique key: text + sender + timestamp (rounded to second)
+      // If message has an ID, use it as the primary key
+      if (msg.id && !msg.isOptimistic) {
+        if (seen.has(msg.id)) {
+          return false; // Duplicate by ID
+        }
+        seen.set(msg.id, true);
+        return true;
+      }
+      
+      // Fallback: Create unique key for messages without IDs
       const key = `${msg.text}|${msg.isCreator}|${Math.floor(msg.timestamp / 1000)}`;
       if (seen.has(key)) {
         return false; // Duplicate
       }
-      seen.add(key);
+      seen.set(key, true);
       return true;
     }).sort((a, b) => a.timestamp - b.timestamp);
   };
@@ -151,6 +164,11 @@ function App() {
     return null;
   };
 
+  // CRITICAL FIX: Generate unique message ID
+  const generateMessageId = () => {
+    return `${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+  };
+
   // Initialize socket
   useEffect(() => {
     console.log('🔌 Initializing socket connection');
@@ -170,15 +188,20 @@ function App() {
       setSocketConnected(true);
       reconnectAttempts.current = 0;
       
-      if (pendingMessages.current.length > 0 && activeConvId) {
-        pendingMessages.current.forEach(msg => {
-          socket.emit('send-message', {
-            convId: activeConvId,
-            message: msg.text,
-            isCreator: msg.isCreator
-          });
+      // FIXED: Only send pending messages that haven't been confirmed
+      if (pendingMessages.current.size > 0 && activeConvId) {
+        console.log('📤 Sending pending messages:', pendingMessages.current.size);
+        pendingMessages.current.forEach((msgData, msgId) => {
+          if (!sentMessageIds.current.has(msgId)) {
+            console.log('📨 Sending pending message:', msgId);
+            socket.emit('send-message', {
+              convId: activeConvId,
+              message: msgData.text,
+              isCreator: msgData.isCreator,
+              messageId: msgId // Send the message ID to server
+            });
+          }
         });
-        pendingMessages.current = [];
       }
     });
     
@@ -193,15 +216,39 @@ function App() {
       setSocketConnected(true);
       reconnectAttempts.current = 0;
       
+      // FIXED: Don't re-join if already in a conversation (prevents message reload)
       if (activeConvId) {
-        socket.emit('join-conversation', { convId: activeConvId, isCreator });
+        console.log('🔌 Re-joining conversation:', activeConvId);
+        // Note: We don't request message reload here
+        socket.emit('join-conversation', { 
+          convId: activeConvId, 
+          isCreator,
+          skipMessageLoad: true // Tell server not to send messages again
+        });
+      }
+    });
+    
+    // CRITICAL: Handle message confirmation from server
+    socket.on('message-sent', ({ convId, message: confirmedMessage, messageId }) => {
+      console.log('✅ Message confirmed:', messageId);
+      
+      // Mark message as sent
+      if (messageId) {
+        sentMessageIds.current.add(messageId);
+        pendingMessages.current.delete(messageId);
+      }
+      
+      // Clean up old sent IDs (keep last 100)
+      if (sentMessageIds.current.size > 100) {
+        const oldIds = Array.from(sentMessageIds.current).slice(0, 50);
+        oldIds.forEach(id => sentMessageIds.current.delete(id));
       }
     });
     
     return () => {
       if (socket) socket.disconnect();
     };
-  }, []);
+  }, []); // Empty dependency - only run once
 
   // Check for saved session or direct link
   useEffect(() => {
@@ -289,7 +336,7 @@ function App() {
   // FIXED: Handle direct link without duplicates
   const handleDirectLink = async (linkId) => {
     console.log('🔗 Handling direct link:', linkId);
-    hasLoadedMessages.current = false; // Reset flag
+    hasLoadedMessages.current = false;
     
     const saved = localStorage.getItem('my_chat_history');
     const chatHistory = saved ? JSON.parse(saved) : [];
@@ -300,36 +347,32 @@ function App() {
       if (existingChat) {
         console.log('♻️ Restoring conversation:', existingChat.convId);
         
-        // Load from cache FIRST
         const cachedConv = loadConversationFromStorage(existingChat.convId);
         
         setActiveConvId(existingChat.convId);
         setIsCreator(false);
         
         if (cachedConv && cachedConv.messages && cachedConv.messages.length > 0) {
-          // Show cached messages immediately
           setCurrentConv(cachedConv);
           setView('chat');
-          hasLoadedMessages.current = true; // Mark as loaded
+          hasLoadedMessages.current = true;
         }
         
-        // Join socket room BEFORE fetching from server
         setTimeout(() => {
           if (socket && socket.connected) {
             console.log('🔌 Joining conversation room:', existingChat.convId);
             socket.emit('join-conversation', { 
               convId: existingChat.convId, 
-              isCreator: false 
+              isCreator: false,
+              skipMessageLoad: cachedConv && cachedConv.messages && cachedConv.messages.length > 0
             });
           }
         }, 100);
         
-        // Fetch from server for updates
         try {
           const response = await axios.get(`${API_URL}/api/conversations/${existingChat.convId}`);
           const { conversation } = response.data;
           
-          // Only merge if server has MORE messages than cache
           if (cachedConv && cachedConv.messages) {
             const cachedCount = cachedConv.messages.length;
             const serverCount = conversation.messages?.length || 0;
@@ -351,7 +394,6 @@ function App() {
               saveConversationToStorage(convData);
             }
           } else {
-            // No cache, use server data
             const convData = {
               id: existingChat.convId,
               linkId: conversation.linkId,
@@ -415,7 +457,6 @@ function App() {
     const handleLoadMessages = ({ messages }) => {
       console.log('📥 Socket load-messages:', messages?.length || 0);
       
-      // IMPORTANT: Only load from socket if we haven't already loaded from cache
       if (hasLoadedMessages.current) {
         console.log('⏭️ Skipping socket load - already have messages from cache');
         return;
@@ -438,17 +479,21 @@ function App() {
       
       if (convId === activeConvId && currentConv) {
         setCurrentConv(prev => {
-          // Remove pending/optimistic messages that match
           const filteredMessages = (prev.messages || []).filter(msg => 
             !(msg.isOptimistic && msg.text === newMessage.text && msg.isCreator === newMessage.isCreator)
           );
           
-          // Check if message already exists
-          const exists = filteredMessages.some(msg => 
-            msg.text === newMessage.text && 
-            msg.isCreator === newMessage.isCreator &&
-            Math.abs(msg.timestamp - newMessage.timestamp) < 2000
-          );
+          // Check if message already exists by ID or content
+          const exists = filteredMessages.some(msg => {
+            // Check by ID first
+            if (msg.id && newMessage.id && msg.id === newMessage.id) {
+              return true;
+            }
+            // Fallback: check by content and timestamp
+            return msg.text === newMessage.text && 
+                   msg.isCreator === newMessage.isCreator &&
+                   Math.abs(msg.timestamp - newMessage.timestamp) < 2000;
+          });
           
           if (exists) {
             console.log('⏭️ Message already exists, skipping');
@@ -654,7 +699,7 @@ function App() {
 
   const openConversation = async (convId) => {
     setLoading(true);
-    hasLoadedMessages.current = false; // Reset flag
+    hasLoadedMessages.current = false;
     try {
       const cachedConv = loadConversationFromStorage(convId);
       if (cachedConv) {
@@ -689,7 +734,7 @@ function App() {
         })
       );
       
-      socket.emit('join-conversation', { convId, isCreator: true });
+      socket.emit('join-conversation', { convId, isCreator: true, skipMessageLoad: true });
     } catch (error) {
       console.error('Error opening conversation:', error);
       const cachedConv = loadConversationFromStorage(convId);
@@ -776,17 +821,27 @@ function App() {
     }
   };
 
+  // CRITICAL FIX: Send message with unique ID tracking
   const sendMessageHandler = () => {
     if (!message.trim() || !activeConvId) return;
     
     const messageText = message.trim();
+    const messageId = generateMessageId();
+    
     const tempMessage = {
-      id: `temp_${Date.now()}`,
+      id: messageId,
       text: messageText,
       timestamp: Date.now(),
       isCreator: isCreator,
       isOptimistic: true
     };
+    
+    // Add to pending messages
+    pendingMessages.current.set(messageId, {
+      text: messageText,
+      isCreator: isCreator,
+      timestamp: Date.now()
+    });
     
     // Add optimistic message to UI
     setCurrentConv(prev => {
@@ -802,10 +857,16 @@ function App() {
     setMessage('');
     
     if (socket && socket.connected) {
-      socket.emit('send-message', { convId: activeConvId, message: messageText, isCreator });
+      console.log('📤 Sending message with ID:', messageId);
+      socket.emit('send-message', { 
+        convId: activeConvId, 
+        message: messageText, 
+        isCreator,
+        messageId: messageId // Include message ID
+      });
       socket.emit('stop-typing', { convId: activeConvId });
     } else {
-      pendingMessages.current.push({ text: messageText, isCreator });
+      console.log('⚠️ Socket disconnected, message queued:', messageId);
     }
     
     ReactGA.event({ category: 'Chat', action: 'Send Message', label: isCreator ? 'Creator' : 'Anonymous User' });
@@ -862,6 +923,8 @@ function App() {
       setActiveConvId(null);
       setCurrentConv(null);
       hasLoadedMessages.current = false;
+      // Clear pending messages when leaving chat
+      pendingMessages.current.clear();
       window.history.pushState({}, '', `/?creator=${myLinkId}`);
     } else {
       setView('home');
@@ -872,6 +935,8 @@ function App() {
       setCurrentConv(null);
       setIsCreator(false);
       hasLoadedMessages.current = false;
+      pendingMessages.current.clear();
+      sentMessageIds.current.clear();
       window.history.pushState({}, '', '/');
     }
   };
