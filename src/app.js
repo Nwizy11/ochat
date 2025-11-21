@@ -1,20 +1,28 @@
-// src/App.js - FIXED: No duplicate messages on reconnect
+// src/App.js - Fixed version with no flash and better notification UI
 import React, { useState, useEffect, useRef } from 'react';
-import { MessageCircle, Send, Copy, Check, Plus, User, List } from 'lucide-react';
+import { MessageCircle, Send, Copy, Check, Plus, User, List, Bell } from 'lucide-react';
 import io from 'socket.io-client';
 import axios from 'axios';
 import ReactGA from 'react-ga4';
 import './app.css';
 
 // Initialize Google Analytics
-const TRACKING_ID = 'G-FE98DD5ZS8';
+const TRACKING_ID = 'G-XXXXXXXXXX'; // Replace with your GA4 Measurement ID
 ReactGA.initialize(TRACKING_ID);
 
-const API_URL = "https://anonym-backend.onrender.com";
+// Detect if we're on mobile and use appropriate API URL
+const getApiUrl = () => {
+  if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+    return 'http://localhost:5000';
+  }
+  return `http://${window.location.hostname}:5000`;
+};
+
+const API_URL = getApiUrl();
 let socket;
 
 function App() {
-  const [view, setView] = useState('loading');
+  const [view, setView] = useState('loading'); // Start with loading state
   const [myLinkId, setMyLinkId] = useState(null);
   const [myCreatorId, setMyCreatorId] = useState(null);
   const [activeConvId, setActiveConvId] = useState(null);
@@ -33,16 +41,15 @@ function App() {
   const messagesEndRef = useRef(null);
   const typingTimeoutRef = useRef(null);
   const audioContextRef = useRef(null);
+  const lastMessageCountRef = useRef(0);
   const reconnectAttempts = useRef(0);
-  
-  // CRITICAL FIX: Track sent messages by unique ID to prevent re-sending
-  const sentMessageIds = useRef(new Set());
-  const pendingMessages = useRef(new Map()); // Map of messageId -> message data
-  const hasLoadedMessages = useRef(false);
+  const pendingMessages = useRef([]);
 
-  // Initialize audio context
+  // Initialize audio context for notification sound
   useEffect(() => {
+    // Create audio context (modern way to generate sounds)
     audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)();
+    
     return () => {
       if (audioContextRef.current) {
         audioContextRef.current.close();
@@ -53,16 +60,22 @@ function App() {
   // Play notification sound
   const playNotificationSound = () => {
     if (!audioContextRef.current) return;
+    
     try {
       const ctx = audioContextRef.current;
       const oscillator = ctx.createOscillator();
       const gainNode = ctx.createGain();
+      
       oscillator.connect(gainNode);
       gainNode.connect(ctx.destination);
+      
+      // Create a pleasant notification sound (two-tone)
       oscillator.frequency.setValueAtTime(800, ctx.currentTime);
       oscillator.frequency.setValueAtTime(600, ctx.currentTime + 0.1);
+      
       gainNode.gain.setValueAtTime(0.3, ctx.currentTime);
       gainNode.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.3);
+      
       oscillator.start(ctx.currentTime);
       oscillator.stop(ctx.currentTime + 0.3);
     } catch (error) {
@@ -70,12 +83,18 @@ function App() {
     }
   };
 
-  const isPageVisible = () => document.visibilityState === 'visible';
+  // Check if page is visible
+  const isPageVisible = () => {
+    return document.visibilityState === 'visible';
+  };
 
   const saveReadStatus = (convId, readUpToMessageCount) => {
     try {
       const readStatus = JSON.parse(localStorage.getItem('chat_read_status') || '{}');
-      readStatus[convId] = { readUpToMessageCount, timestamp: Date.now() };
+      readStatus[convId] = {
+        readUpToMessageCount,
+        timestamp: Date.now()
+      };
       localStorage.setItem('chat_read_status', JSON.stringify(readStatus));
     } catch (error) {
       console.error('Error saving read status:', error);
@@ -87,6 +106,7 @@ function App() {
       const readStatus = JSON.parse(localStorage.getItem('chat_read_status') || '{}');
       return readStatus[convId] || null;
     } catch (error) {
+      console.error('Error getting read status:', error);
       return null;
     }
   };
@@ -96,37 +116,17 @@ function App() {
     if (!readStatus) {
       return conv.messages ? conv.messages.filter(m => !m.isCreator).length : 0;
     }
+    
     const totalMessages = conv.messages?.length || 0;
-    if (totalMessages <= readStatus.readUpToMessageCount) return 0;
+    if (totalMessages <= readStatus.readUpToMessageCount) {
+      return 0;
+    }
+    
     const newMessages = conv.messages.slice(readStatus.readUpToMessageCount);
     return newMessages.filter(m => !m.isCreator).length;
   };
 
-  // IMPROVED: Better deduplication with message ID tracking
-  const deduplicateMessages = (messages) => {
-    const seen = new Map(); // Use Map to track by ID
-    
-    return messages.filter(msg => {
-      // If message has an ID, use it as the primary key
-      if (msg.id && !msg.isOptimistic) {
-        if (seen.has(msg.id)) {
-          return false; // Duplicate by ID
-        }
-        seen.set(msg.id, true);
-        return true;
-      }
-      
-      // Fallback: Create unique key for messages without IDs
-      const key = `${msg.text}|${msg.isCreator}|${Math.floor(msg.timestamp / 1000)}`;
-      if (seen.has(key)) {
-        return false; // Duplicate
-      }
-      seen.set(key, true);
-      return true;
-    }).sort((a, b) => a.timestamp - b.timestamp);
-  };
-
-  // Save conversation to localStorage
+  // Save conversation to localStorage (MORE AGGRESSIVE)
   const saveConversationToStorage = (conversation) => {
     try {
       if (conversation && conversation.id) {
@@ -141,7 +141,7 @@ function App() {
           version: 1
         };
         localStorage.setItem(storageKey, JSON.stringify(dataToSave));
-        console.log('💾 Saved conversation:', conversation.id, 'Messages:', dataToSave.messages.length);
+        console.log('💾 Saved conversation to localStorage:', conversation.id, 'Messages:', dataToSave.messages.length);
       }
     } catch (error) {
       console.error('Error saving conversation:', error);
@@ -155,7 +155,7 @@ function App() {
       const saved = localStorage.getItem(storageKey);
       if (saved) {
         const conversation = JSON.parse(saved);
-        console.log('📂 Loaded from cache:', convId, 'Messages:', conversation.messages?.length || 0);
+        console.log('📂 Loaded conversation from localStorage:', convId, 'Messages:', conversation.messages?.length || 0);
         return conversation;
       }
     } catch (error) {
@@ -164,14 +164,47 @@ function App() {
     return null;
   };
 
-  // CRITICAL FIX: Generate unique message ID
-  const generateMessageId = () => {
-    return `${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+  // Save message immediately to localStorage (BACKUP)
+  const saveMessageToStorage = (convId, message) => {
+    try {
+      const storageKey = `conversation_${convId}`;
+      const saved = localStorage.getItem(storageKey);
+      
+      let conversation;
+      if (saved) {
+        conversation = JSON.parse(saved);
+      } else {
+        conversation = {
+          id: convId,
+          messages: [],
+          createdAt: Date.now()
+        };
+      }
+      
+      // Check if message already exists
+      const messageExists = conversation.messages.some(msg => 
+        msg.text === message.text && 
+        msg.isCreator === message.isCreator &&
+        Math.abs(msg.timestamp - message.timestamp) < 2000
+      );
+      
+      if (!messageExists) {
+        conversation.messages.push(message);
+        conversation.lastMessage = message.timestamp;
+        conversation.savedAt = Date.now();
+        localStorage.setItem(storageKey, JSON.stringify(conversation));
+        console.log('💾 Message saved to localStorage backup');
+      }
+    } catch (error) {
+      console.error('Error saving message to storage:', error);
+    }
   };
 
-  // Initialize socket
+  // Initialize socket connection
   useEffect(() => {
-    console.log('🔌 Initializing socket connection');
+    console.log('🔌 Initializing socket connection to:', API_URL);
+    
+    // Track page view on mount
     ReactGA.send({ hitType: "pageview", page: window.location.pathname + window.location.search });
     
     socket = io(API_URL, {
@@ -184,29 +217,32 @@ function App() {
     });
     
     socket.on('connect', () => {
-      console.log('✅ Connected:', socket.id);
+      console.log('✅ Connected to server, socket ID:', socket.id);
       setSocketConnected(true);
       reconnectAttempts.current = 0;
       
-      // FIXED: Only send pending messages that haven't been confirmed
-      if (pendingMessages.current.size > 0 && activeConvId) {
-        console.log('📤 Sending pending messages:', pendingMessages.current.size);
-        pendingMessages.current.forEach((msgData, msgId) => {
-          if (!sentMessageIds.current.has(msgId)) {
-            console.log('📨 Sending pending message:', msgId);
-            socket.emit('send-message', {
-              convId: activeConvId,
-              message: msgData.text,
-              isCreator: msgData.isCreator,
-              messageId: msgId // Send the message ID to server
-            });
-          }
+      // Send any pending messages
+      if (pendingMessages.current.length > 0 && activeConvId) {
+        console.log('📤 Sending', pendingMessages.current.length, 'pending messages');
+        pendingMessages.current.forEach(msg => {
+          socket.emit('send-message', {
+            convId: activeConvId,
+            message: msg.text,
+            isCreator: msg.isCreator
+          });
         });
+        pendingMessages.current = [];
       }
     });
     
     socket.on('disconnect', (reason) => {
-      console.log('⚠️ Disconnected:', reason);
+      console.log('⚠️ Disconnected from server. Reason:', reason);
+      setSocketConnected(false);
+      reconnectAttempts.current++;
+    });
+    
+    socket.on('connect_error', (error) => {
+      console.error('❌ Connection error:', error.message);
       setSocketConnected(false);
       reconnectAttempts.current++;
     });
@@ -216,88 +252,95 @@ function App() {
       setSocketConnected(true);
       reconnectAttempts.current = 0;
       
-      // FIXED: Don't re-join if already in a conversation (prevents message reload)
       if (activeConvId) {
-        console.log('🔌 Re-joining conversation:', activeConvId);
-        // Note: We don't request message reload here
+        console.log('♻️ Rejoining conversation:', activeConvId);
         socket.emit('join-conversation', { 
           convId: activeConvId, 
-          isCreator,
-          skipMessageLoad: true // Tell server not to send messages again
+          isCreator 
         });
       }
     });
     
-    // CRITICAL: Handle message confirmation from server
-    socket.on('message-sent', ({ convId, message: confirmedMessage, messageId }) => {
-      console.log('✅ Message confirmed:', messageId);
-      
-      // Mark message as sent
-      if (messageId) {
-        sentMessageIds.current.add(messageId);
-        pendingMessages.current.delete(messageId);
-      }
-      
-      // Clean up old sent IDs (keep last 100)
-      if (sentMessageIds.current.size > 100) {
-        const oldIds = Array.from(sentMessageIds.current).slice(0, 50);
-        oldIds.forEach(id => sentMessageIds.current.delete(id));
-      }
+    socket.on('error', (error) => {
+      console.error('🔴 Socket error:', error);
     });
     
     return () => {
-      if (socket) socket.disconnect();
+      if (socket) {
+        console.log('🔌 Disconnecting socket');
+        socket.disconnect();
+      }
     };
-  }, []); // Empty dependency - only run once
+  }, []);
 
-  // Check for saved session or direct link
+  // Check for saved creator session or direct link on mount
   useEffect(() => {
     const initializeApp = async () => {
+      // Check URL parameters FIRST before loading anything
       const urlParams = new URLSearchParams(window.location.search);
       const linkParam = urlParams.get('link');
       const creatorParam = urlParams.get('creator');
       
+      // Load saved data
       loadMyLinks();
       await loadMyChatHistory();
       
       if (creatorParam) {
+        console.log('🔄 Restoring creator session:', creatorParam);
         await restoreCreatorSession(creatorParam);
       } else if (linkParam) {
+        console.log('📎 Direct link detected:', linkParam);
         await handleDirectLink(linkParam);
       } else {
+        // No active session, go to home
         setView('home');
       }
     };
+    
     initializeApp();
   }, []);
 
+  // Load my links from localStorage
   const loadMyLinks = () => {
     try {
       const saved = localStorage.getItem('my_chat_links');
+      console.log('📚 Raw localStorage data:', saved);
       if (saved) {
         const links = JSON.parse(saved);
         setMyLinks(links);
+        console.log('📚 Loaded saved links:', links.length, links);
+      } else {
+        console.log('📚 No saved links found');
       }
     } catch (error) {
       console.error('Error loading links:', error);
     }
   };
 
+  // Save link to localStorage
   const saveMyLink = (linkId, creatorId) => {
     try {
       const saved = localStorage.getItem('my_chat_links');
       const links = saved ? JSON.parse(saved) : [];
+      
       if (!links.some(l => l.linkId === linkId)) {
-        links.unshift({ linkId, creatorId, createdAt: Date.now() });
+        links.unshift({
+          linkId,
+          creatorId,
+          createdAt: Date.now()
+        });
+        
         const trimmedLinks = links.slice(0, 10);
         localStorage.setItem('my_chat_links', JSON.stringify(trimmedLinks));
         setMyLinks(trimmedLinks);
+        console.log('💾 Saved link:', linkId);
       }
     } catch (error) {
       console.error('Error saving link:', error);
     }
   };
 
+  // Remove link from localStorage
   const removeMyLink = (linkId) => {
     try {
       const saved = localStorage.getItem('my_chat_links');
@@ -306,12 +349,14 @@ function App() {
         const filtered = links.filter(l => l.linkId !== linkId);
         localStorage.setItem('my_chat_links', JSON.stringify(filtered));
         setMyLinks(filtered);
+        console.log('🗑️ Removed link:', linkId);
       }
     } catch (error) {
       console.error('Error removing link:', error);
     }
   };
 
+  // Restore creator session from URL
   const restoreCreatorSession = async (linkId) => {
     try {
       const response = await axios.get(`${API_URL}/api/links/${linkId}`);
@@ -322,9 +367,13 @@ function App() {
         setMyCreatorId(link.creatorId);
         setIsCreator(true);
         setView('creator');
+        
         socket.emit('join-link', { linkId, creatorId: link.creatorId });
+        
         const convResponse = await axios.get(`${API_URL}/api/links/${linkId}/conversations`);
         setConversations(convResponse.data.conversations || []);
+        
+        console.log('✅ Creator session restored');
       }
     } catch (error) {
       console.error('Error restoring session:', error);
@@ -333,89 +382,98 @@ function App() {
     }
   };
 
-  // FIXED: Handle direct link without duplicates
+  // Handle direct link access
   const handleDirectLink = async (linkId) => {
     console.log('🔗 Handling direct link:', linkId);
-    hasLoadedMessages.current = false;
     
     const saved = localStorage.getItem('my_chat_history');
     const chatHistory = saved ? JSON.parse(saved) : [];
+    console.log('📚 Current chat history:', chatHistory);
     
     try {
       const existingChat = chatHistory.find(chat => chat.linkId === linkId);
+      console.log('🔍 Existing chat found:', existingChat);
       
       if (existingChat) {
         console.log('♻️ Restoring conversation:', existingChat.convId);
         
+        // First, try to load from localStorage immediately
         const cachedConv = loadConversationFromStorage(existingChat.convId);
-        
-        setActiveConvId(existingChat.convId);
-        setIsCreator(false);
-        
-        if (cachedConv && cachedConv.messages && cachedConv.messages.length > 0) {
+        if (cachedConv) {
+          console.log('📂 Loading cached messages first:', cachedConv.messages.length);
+          setActiveConvId(existingChat.convId);
+          setIsCreator(false);
           setCurrentConv(cachedConv);
           setView('chat');
-          hasLoadedMessages.current = true;
         }
         
-        setTimeout(() => {
-          if (socket && socket.connected) {
-            console.log('🔌 Joining conversation room:', existingChat.convId);
-            socket.emit('join-conversation', { 
-              convId: existingChat.convId, 
-              isCreator: false,
-              skipMessageLoad: cachedConv && cachedConv.messages && cachedConv.messages.length > 0
-            });
-          }
-        }, 100);
-        
         try {
+          // Then fetch from server to get any new messages
           const response = await axios.get(`${API_URL}/api/conversations/${existingChat.convId}`);
           const { conversation } = response.data;
           
-          if (cachedConv && cachedConv.messages) {
-            const cachedCount = cachedConv.messages.length;
-            const serverCount = conversation.messages?.length || 0;
-            
-            if (serverCount > cachedCount) {
-              console.log('📥 Server has new messages, merging...');
-              const allMessages = [...cachedConv.messages, ...conversation.messages];
-              const mergedMessages = deduplicateMessages(allMessages);
-              
-              const convData = {
-                id: existingChat.convId,
-                linkId: conversation.linkId,
-                messages: mergedMessages,
-                createdAt: conversation.createdAt,
-                lastMessage: conversation.lastMessage
-              };
-              
-              setCurrentConv(convData);
-              saveConversationToStorage(convData);
-            }
-          } else {
-            const convData = {
-              id: existingChat.convId,
-              linkId: conversation.linkId,
-              messages: conversation.messages || [],
-              createdAt: conversation.createdAt,
-              lastMessage: conversation.lastMessage
-            };
-            setCurrentConv(convData);
-            setView('chat');
-            saveConversationToStorage(convData);
-            hasLoadedMessages.current = true;
-          }
+          console.log('📦 Server returned conversation:', conversation);
+          
+          setActiveConvId(existingChat.convId);
+          setIsCreator(false);
+          
+          // Merge cached messages with server messages
+          const cachedMessages = cachedConv?.messages || [];
+          const serverMessages = conversation.messages || [];
+          
+          // Create a map to deduplicate messages
+          const messageMap = new Map();
+          
+          // Add cached messages first
+          cachedMessages.forEach(msg => {
+            const key = `${msg.text}_${msg.isCreator}_${Math.floor(msg.timestamp / 1000)}`;
+            messageMap.set(key, msg);
+          });
+          
+          // Add server messages (will overwrite cached if exists)
+          serverMessages.forEach(msg => {
+            const key = `${msg.text}_${msg.isCreator}_${Math.floor(msg.timestamp / 1000)}`;
+            messageMap.set(key, msg);
+          });
+          
+          // Convert back to array and sort by timestamp
+          const mergedMessages = Array.from(messageMap.values()).sort((a, b) => a.timestamp - b.timestamp);
+          
+          const convData = {
+            id: existingChat.convId,
+            linkId: conversation.linkId,
+            messages: mergedMessages,
+            createdAt: conversation.createdAt,
+            lastMessage: conversation.lastMessage
+          };
+          
+          setCurrentConv(convData);
+          setView('chat');
+          
+          // Save merged data
+          saveConversationToStorage(convData);
           
           updateChatHistoryActivity(existingChat.convId);
+          
+          setTimeout(() => {
+            if (socket && socket.connected) {
+              console.log('🔌 Joining conversation room:', existingChat.convId);
+              socket.emit('join-conversation', { 
+                convId: existingChat.convId, 
+                isCreator: false 
+              });
+            }
+          }, 100);
+          
         } catch (error) {
-          console.error('❌ Server fetch failed, using cache');
+          console.error('❌ Failed to fetch from server, using cached data');
           if (!cachedConv) {
             removeChatHistory(existingChat.convId);
             await createNewConversation(linkId);
           }
         }
       } else {
+        console.log('🆕 No existing chat, creating new conversation');
         await createNewConversation(linkId);
       }
     } catch (error) {
@@ -426,21 +484,28 @@ function App() {
     }
   };
 
+  // Create new conversation helper
   const createNewConversation = async (linkId) => {
     const verifyResponse = await axios.get(`${API_URL}/api/links/${linkId}/verify`);
     
     if (verifyResponse.data.exists) {
-      const response = await axios.post(`${API_URL}/api/conversations/create`, { linkId });
+      const response = await axios.post(`${API_URL}/api/conversations/create`, {
+        linkId: linkId
+      });
+      
       const { conversation } = response.data;
       
       setActiveConvId(conversation.id);
       setCurrentConv(conversation);
       setIsCreator(false);
       setView('chat');
-      hasLoadedMessages.current = true;
       
       saveChatHistory(linkId, conversation.id);
-      socket.emit('join-conversation', { convId: conversation.id, isCreator: false });
+      
+      socket.emit('join-conversation', { 
+        convId: conversation.id, 
+        isCreator: false 
+      });
       
       console.log('✅ Created new conversation:', conversation.id);
     } else {
@@ -450,69 +515,119 @@ function App() {
     }
   };
 
-  // FIXED: Socket message handling - no duplicates
+  // Load messages for current conversation with real-time updates
   useEffect(() => {
     if (!socket) return;
 
     const handleLoadMessages = ({ messages }) => {
-      console.log('📥 Socket load-messages:', messages?.length || 0);
+      console.log('📥 Socket: Loading messages from server:', messages?.length || 0);
       
-      if (hasLoadedMessages.current) {
-        console.log('⏭️ Skipping socket load - already have messages from cache');
-        return;
-      }
-      
-      if (activeConvId && messages && messages.length > 0) {
-        setCurrentConv(prev => ({
-          ...prev,
-          id: activeConvId,
-          messages: deduplicateMessages(messages)
-        }));
-        hasLoadedMessages.current = true;
+      if (activeConvId) {
+        setCurrentConv(prev => {
+          // Get existing messages (might be from cache)
+          const existingMessages = prev?.messages || [];
+          
+          // If we have cached messages, merge with server messages
+          if (existingMessages.length > 0) {
+            console.log('🔄 Merging cached messages with server messages');
+            
+            // Create a map to deduplicate
+            const messageMap = new Map();
+            
+            // Add existing messages first
+            existingMessages.forEach(msg => {
+              const key = `${msg.text}_${msg.isCreator}_${Math.floor(msg.timestamp / 1000)}`;
+              messageMap.set(key, msg);
+            });
+            
+            // Add server messages (will overwrite if exists)
+            (messages || []).forEach(msg => {
+              const key = `${msg.text}_${msg.isCreator}_${Math.floor(msg.timestamp / 1000)}`;
+              messageMap.set(key, msg);
+            });
+            
+            // Convert back to array and sort
+            const mergedMessages = Array.from(messageMap.values()).sort((a, b) => a.timestamp - b.timestamp);
+            
+            const updated = {
+              ...prev,
+              id: activeConvId,
+              messages: mergedMessages
+            };
+            
+            console.log('💾 Merged messages:', mergedMessages.length);
+            return updated;
+          }
+          
+          // No cached messages, just use server messages
+          const updated = {
+            ...prev,
+            id: activeConvId,
+            messages: messages || []
+          };
+          console.log('💾 Using server messages:', messages?.length || 0);
+          return updated;
+        });
       }
     };
 
     const handleNewMessage = ({ convId, message: newMessage }) => {
-      console.log('📩 New message:', convId, newMessage.text.substring(0, 20));
+      console.log('📩 New message received:', {
+        convId,
+        activeConvId,
+        message: newMessage,
+        isForThisConv: convId === activeConvId
+      });
       
+      // Check if this is a message from the other person
       const isMessageFromOther = newMessage.isCreator !== isCreator;
       
       if (convId === activeConvId && currentConv) {
         setCurrentConv(prev => {
+          // Remove any pending messages that match this one
           const filteredMessages = (prev.messages || []).filter(msg => 
-            !(msg.isOptimistic && msg.text === newMessage.text && msg.isCreator === newMessage.isCreator)
+            !(msg.pending && msg.text === newMessage.text && msg.isCreator === newMessage.isCreator)
           );
           
-          // Check if message already exists by ID or content
-          const exists = filteredMessages.some(msg => {
-            // Check by ID first
-            if (msg.id && newMessage.id && msg.id === newMessage.id) {
-              return true;
-            }
-            // Fallback: check by content and timestamp
-            return msg.text === newMessage.text && 
-                   msg.isCreator === newMessage.isCreator &&
-                   Math.abs(msg.timestamp - newMessage.timestamp) < 2000;
-          });
+          // Check if this exact message already exists (prevent duplicates)
+          const messageExists = filteredMessages.some(msg => 
+            msg.text === newMessage.text && 
+            msg.isCreator === newMessage.isCreator &&
+            Math.abs(msg.timestamp - newMessage.timestamp) < 1000
+          );
           
-          if (exists) {
-            console.log('⏭️ Message already exists, skipping');
+          if (messageExists) {
+            console.log('💬 Message already exists in UI, skipping duplicate');
             return prev;
           }
           
-          const updatedMessages = deduplicateMessages([...filteredMessages, newMessage]);
           const updatedConv = {
             ...prev,
-            messages: updatedMessages,
+            messages: [...filteredMessages, newMessage],
             lastMessage: newMessage.timestamp
           };
+          console.log('💾 Updated conversation with new message:', updatedConv.messages.length);
           
+          // Save to localStorage for persistence
           saveConversationToStorage(updatedConv);
+          
           return updatedConv;
         });
         
+        // Play sound if message is from other person and page is not visible
         if (isMessageFromOther && !isPageVisible()) {
+          console.log('🔔 Playing notification sound - page not visible');
           playNotificationSound();
+          
+          // Show browser notification if permission granted
+          if ('Notification' in window && Notification.permission === 'granted') {
+            new Notification('New Message', {
+              body: newMessage.text.substring(0, 50) + (newMessage.text.length > 50 ? '...' : ''),
+              icon: '/favicon.ico',
+              tag: 'chat-message',
+              requireInteraction: false
+            });
+          }
         }
       }
       
@@ -522,11 +637,21 @@ function App() {
             if (conv.id === convId) {
               const isViewingThisChat = (view === 'chat' && activeConvId === convId);
               const shouldIncrementUnread = !newMessage.isCreator && !isViewingThisChat;
+              const newUnreadCount = shouldIncrementUnread 
+                ? (conv.unreadCount || 0) + 1 
+                : (conv.unreadCount || 0);
+              
+              // Play sound if not viewing this chat and message is from anonymous user
+              if (shouldIncrementUnread && !isPageVisible()) {
+                console.log('🔔 Playing notification sound for creator - new conversation message');
+                playNotificationSound();
+              }
+              
               return {
                 ...conv,
                 messages: [...(conv.messages || []), newMessage],
                 lastMessage: newMessage.timestamp,
-                unreadCount: shouldIncrementUnread ? (conv.unreadCount || 0) + 1 : (conv.unreadCount || 0)
+                unreadCount: newUnreadCount
               };
             }
             return conv;
@@ -537,13 +662,17 @@ function App() {
 
     const handleUserTyping = ({ isCreator: typingIsCreator }) => {
       setTypingUser(typingIsCreator ? 'creator' : 'anonymous');
-      if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+      if (typingTimeoutRef.current) {
+        clearTimeout(typingTimeoutRef.current);
+      }
       typingTimeoutRef.current = setTimeout(() => setTypingUser(null), 3000);
     };
 
     const handleUserStopTyping = () => {
       setTypingUser(null);
-      if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+      if (typingTimeoutRef.current) {
+        clearTimeout(typingTimeoutRef.current);
+      }
     };
 
     socket.on('load-messages', handleLoadMessages);
@@ -559,48 +688,87 @@ function App() {
     };
   }, [currentConv, isCreator, view, activeConvId]);
 
-  // Load conversations for creator
+  // Load conversations for creator with real-time updates
   useEffect(() => {
     if (!socket || !myLinkId || view !== 'creator') return;
 
     const handleLoadConversations = ({ conversations: convs }) => {
-      const conversationsWithUnread = convs.map(conv => ({
-        ...conv,
-        unreadCount: calculateUnreadCount(conv)
-      }));
+      console.log('📋 Loaded conversations:', convs.length);
+      const conversationsWithUnread = convs.map(conv => {
+        const unreadCount = calculateUnreadCount(conv);
+        return {
+          ...conv,
+          unreadCount
+        };
+      });
       setConversations(conversationsWithUnread || []);
     };
 
     const handleNewConversation = ({ conversation }) => {
+      console.log('🆕 New conversation added:', conversation.id);
       setConversations(prev => {
-        if (prev.some(c => c.id === conversation.id)) return prev;
-        return [...prev, { ...conversation, unreadCount: calculateUnreadCount(conversation) }];
+        const exists = prev.some(c => c.id === conversation.id);
+        if (exists) return prev;
+        
+        const unreadCount = calculateUnreadCount(conversation);
+        
+        return [...prev, { 
+          ...conversation, 
+          unreadCount 
+        }];
       });
     };
 
     const handleConversationUpdated = ({ conversation }) => {
+      console.log('🔄 Conversation updated:', conversation.id);
       setConversations(prev => {
         const exists = prev.some(c => c.id === conversation.id);
         if (exists) {
           return prev.map(conv => {
             if (conv.id === conversation.id) {
               const isViewingThisChat = (view === 'chat' && activeConvId === conversation.id);
+              
               if (isViewingThisChat) {
-                return { ...conv, ...conversation, unreadCount: 0 };
+                return {
+                  ...conv,
+                  ...conversation,
+                  unreadCount: 0
+                };
               }
-              const oldCount = conv.messages?.length || 0;
-              const newCount = conversation.messages?.length || 0;
-              if (newCount > oldCount) {
-                const newMessages = conversation.messages.slice(oldCount);
-                const newUnread = newMessages.filter(msg => !msg.isCreator).length;
-                return { ...conv, ...conversation, unreadCount: (conv.unreadCount || 0) + newUnread };
+              
+              const oldMessageCount = conv.messages?.length || 0;
+              const newMessageCount = conversation.messages?.length || 0;
+              
+              if (newMessageCount > oldMessageCount) {
+                const newMessages = conversation.messages.slice(oldMessageCount);
+                const newUnreadCount = newMessages.filter(msg => !msg.isCreator).length;
+                const totalUnread = (conv.unreadCount || 0) + newUnreadCount;
+                
+                return {
+                  ...conv,
+                  ...conversation,
+                  unreadCount: totalUnread
+                };
               }
-              return { ...conv, ...conversation };
+              
+              return {
+                ...conv,
+                ...conversation,
+                unreadCount: conv.unreadCount || 0
+              };
             }
             return conv;
           });
+        } else {
+          const unreadCount = conversation.messages 
+            ? conversation.messages.filter(msg => !msg.isCreator).length 
+            : 0;
+          
+          return [...prev, { 
+            ...conversation, 
+            unreadCount 
+          }];
         }
-        return [...prev, { ...conversation, unreadCount: calculateUnreadCount(conversation) }];
       });
     };
 
@@ -613,21 +781,27 @@ function App() {
       socket.off('new-conversation', handleNewConversation);
       socket.off('conversation-updated', handleConversationUpdated);
     };
-  }, [socket, myLinkId, view, activeConvId]);
+  }, [socket, myLinkId, view, activeConvId, calculateUnreadCount]);
 
+  // Auto scroll to bottom
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [currentConv?.messages]);
 
+  // Request notification permission on mount
   useEffect(() => {
     if ('Notification' in window && Notification.permission === 'default') {
-      Notification.requestPermission();
+      Notification.requestPermission().then(permission => {
+        console.log('🔔 Notification permission:', permission);
+      });
     }
   }, []);
 
+  // Check if user has active chat and show notification
   useEffect(() => {
     if (view === 'home' && !isCreator) {
-      setShowNotification(myChatHistory.length > 0);
+      const hasActiveChat = myChatHistory.length > 0;
+      setShowNotification(hasActiveChat);
     } else {
       setShowNotification(false);
     }
@@ -646,16 +820,33 @@ function App() {
       
       saveMyLink(linkId, creatorId);
       window.history.pushState({}, '', `/?creator=${linkId}`);
+      
       socket.emit('join-link', { linkId, creatorId });
       
       const convResponse = await axios.get(`${API_URL}/api/links/${linkId}/conversations`);
       const convs = convResponse.data.conversations || [];
-      setConversations(convs.map(conv => ({ ...conv, unreadCount: calculateUnreadCount(conv) })));
       
-      ReactGA.event({ category: 'Chat', action: 'Create New Link', label: 'Creator' });
+      const convsWithUnread = convs.map(conv => {
+        const unreadCount = calculateUnreadCount(conv);
+        return {
+          ...conv,
+          unreadCount
+        };
+      });
+      
+      setConversations(convsWithUnread);
+      
+      // Track event
+      ReactGA.event({
+        category: 'Chat',
+        action: 'Create New Link',
+        label: 'Creator'
+      });
+      
+      console.log('✅ Chat link created');
     } catch (error) {
       console.error('Error creating link:', error);
-      alert('Failed to create link');
+      alert('Failed to create link. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -672,71 +863,97 @@ function App() {
         setMyCreatorId(creatorId);
         setIsCreator(true);
         setView('creator');
+        
         window.history.pushState({}, '', `/?creator=${linkId}`);
+        
         socket.emit('join-link', { linkId, creatorId });
         
         const convResponse = await axios.get(`${API_URL}/api/links/${linkId}/conversations`);
         const convs = convResponse.data.conversations || [];
-        setConversations(convs.map(conv => ({ ...conv, unreadCount: calculateUnreadCount(conv) })));
+        
+        const convsWithUnread = convs.map(conv => {
+          const unreadCount = calculateUnreadCount(conv);
+          return {
+            ...conv,
+            unreadCount
+          };
+        });
+        
+        setConversations(convsWithUnread);
+        
+        console.log('✅ Opened existing link:', linkId);
       }
     } catch (error) {
       console.error('Error opening link:', error);
-      alert('Link no longer exists');
+      alert('This link no longer exists or has expired.');
       removeMyLink(linkId);
     } finally {
       setLoading(false);
     }
   };
 
-  const joinWithLink = () => {
+  const joinWithLink = async () => {
     if (!joinLinkId.trim()) {
       alert('Please enter a link ID');
       return;
     }
-    ReactGA.event({ category: 'Chat', action: 'Join with Link', label: 'Anonymous User' });
+    
+    // Track event
+    ReactGA.event({
+      category: 'Chat',
+      action: 'Join with Link',
+      label: 'Anonymous User'
+    });
+    
     window.location.href = `/?link=${joinLinkId}`;
   };
 
   const openConversation = async (convId) => {
     setLoading(true);
-    hasLoadedMessages.current = false;
     try {
+      // Load from cache first for instant display
       const cachedConv = loadConversationFromStorage(convId);
       if (cachedConv) {
         setActiveConvId(convId);
         setCurrentConv(cachedConv);
         setView('chat');
-        hasLoadedMessages.current = true;
       }
       
+      // Then fetch from server
       const response = await axios.get(`${API_URL}/api/conversations/${convId}`);
       const { conversation } = response.data;
       
-      const cachedMessages = cachedConv?.messages || [];
-      const serverMessages = conversation.messages || [];
-      const allMessages = [...cachedMessages, ...serverMessages];
-      const mergedMessages = deduplicateMessages(allMessages);
-      
-      const updatedConv = { ...conversation, messages: mergedMessages };
-      
       setActiveConvId(convId);
-      setCurrentConv(updatedConv);
+      setCurrentConv(conversation);
       setView('chat');
-      saveConversationToStorage(updatedConv);
+      
+      // Save to cache
+      saveConversationToStorage(conversation);
       
       setConversations(prev => 
         prev.map(conv => {
           if (conv.id === convId) {
-            saveReadStatus(convId, mergedMessages.length);
-            return { ...conv, unreadCount: 0, lastReadTime: Date.now() };
+            saveReadStatus(convId, conversation.messages?.length || 0);
+            
+            return {
+              ...conv,
+              unreadCount: 0,
+              lastReadTime: Date.now()
+            };
           }
           return conv;
         })
       );
       
-      socket.emit('join-conversation', { convId, isCreator: true, skipMessageLoad: true });
+      socket.emit('join-conversation', { 
+        convId, 
+        isCreator: true 
+      });
+      
+      console.log('✅ Opened conversation:', convId);
     } catch (error) {
       console.error('Error opening conversation:', error);
+      // If server fails, at least show cached data
       const cachedConv = loadConversationFromStorage(convId);
       if (cachedConv) {
         setActiveConvId(convId);
@@ -762,6 +979,7 @@ function App() {
           resolve([]);
         }
       } catch (error) {
+        console.error('Error loading chat history:', error);
         resolve([]);
       }
     });
@@ -771,12 +989,22 @@ function App() {
     try {
       const saved = localStorage.getItem('my_chat_history');
       const history = saved ? JSON.parse(saved) : [];
+      
       const existingIndex = history.findIndex(h => h.linkId === linkId);
       
       if (existingIndex !== -1) {
-        history[existingIndex] = { ...history[existingIndex], convId, lastActive: Date.now() };
+        history[existingIndex] = {
+          ...history[existingIndex],
+          convId: convId,
+          lastActive: Date.now()
+        };
       } else {
-        history.unshift({ linkId, convId, joinedAt: Date.now(), lastActive: Date.now() });
+        history.unshift({
+          linkId,
+          convId,
+          joinedAt: Date.now(),
+          lastActive: Date.now()
+        });
       }
       
       const trimmed = history.slice(0, 20);
@@ -792,7 +1020,9 @@ function App() {
       const saved = localStorage.getItem('my_chat_history');
       if (saved) {
         const history = JSON.parse(saved);
-        const updated = history.map(h => h.convId === convId ? { ...h, lastActive: Date.now() } : h);
+        const updated = history.map(h => 
+          h.convId === convId ? { ...h, lastActive: Date.now() } : h
+        );
         localStorage.setItem('my_chat_history', JSON.stringify(updated));
         setMyChatHistory(updated);
       }
@@ -817,59 +1047,70 @@ function App() {
 
   const returnToActiveChat = async () => {
     if (myChatHistory.length > 0) {
-      window.location.href = `/?link=${myChatHistory[0].linkId}`;
+      const activeChat = myChatHistory[0];
+      window.location.href = `/?link=${activeChat.linkId}`;
     }
   };
 
-  // CRITICAL FIX: Send message with unique ID tracking
   const sendMessageHandler = () => {
-    if (!message.trim() || !activeConvId) return;
+    if (!message.trim() || !activeConvId) {
+      return;
+    }
     
     const messageText = message.trim();
-    const messageId = generateMessageId();
-    
+    const messageId = `temp_${Date.now()}_${Math.random()}`;
     const tempMessage = {
       id: messageId,
       text: messageText,
       timestamp: Date.now(),
       isCreator: isCreator,
-      isOptimistic: true
+      pending: !socket || !socket.connected,
+      isOptimistic: true // Mark as optimistic
     };
     
-    // Add to pending messages
-    pendingMessages.current.set(messageId, {
-      text: messageText,
-      isCreator: isCreator,
-      timestamp: Date.now()
-    });
+    // IMMEDIATELY save to localStorage FIRST
+    saveMessageToStorage(activeConvId, tempMessage);
     
-    // Add optimistic message to UI
+    // Then update UI
     setCurrentConv(prev => {
       const updatedConv = {
         ...prev,
         messages: [...(prev.messages || []), tempMessage],
         lastMessage: tempMessage.timestamp
       };
+      
+      // Save full conversation too
       saveConversationToStorage(updatedConv);
+      
       return updatedConv;
     });
     
     setMessage('');
     
+    // If connected, send to server
     if (socket && socket.connected) {
-      console.log('📤 Sending message with ID:', messageId);
-      socket.emit('send-message', { 
-        convId: activeConvId, 
-        message: messageText, 
-        isCreator,
-        messageId: messageId // Include message ID
+      socket.emit('send-message', {
+        convId: activeConvId,
+        message: messageText,
+        isCreator
       });
+      
       socket.emit('stop-typing', { convId: activeConvId });
     } else {
-      console.log('⚠️ Socket disconnected, message queued:', messageId);
+      // If disconnected, queue the message
+      console.log('📦 Queuing message for later delivery');
+      pendingMessages.current.push({
+        text: messageText,
+        isCreator: isCreator
+      });
     }
     
-    ReactGA.event({ category: 'Chat', action: 'Send Message', label: isCreator ? 'Creator' : 'Anonymous User' });
+    // Track message sent
+    ReactGA.event({
+      category: 'Chat',
+      action: 'Send Message',
+      label: isCreator ? 'Creator' : 'Anonymous User'
+    });
     
     if (!isCreator) {
       updateChatHistoryActivity(activeConvId);
@@ -878,23 +1119,38 @@ function App() {
 
   const handleTyping = () => {
     if (!activeConvId || !socket) return;
+    
     socket.emit('typing', { convId: activeConvId, isCreator });
-    if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+    
+    if (typingTimeoutRef.current) {
+      clearTimeout(typingTimeoutRef.current);
+    }
     typingTimeoutRef.current = setTimeout(() => {
-      if (socket) socket.emit('stop-typing', { convId: activeConvId });
+      if (socket) {
+        socket.emit('stop-typing', { convId: activeConvId });
+      }
     }, 1000);
   };
 
   const copyLink = () => {
     const fullLink = `${window.location.origin}/?link=${myLinkId}`;
+    
     if (navigator.clipboard && navigator.clipboard.writeText) {
       navigator.clipboard.writeText(fullLink)
         .then(() => {
           setCopied(true);
           setTimeout(() => setCopied(false), 2000);
-          ReactGA.event({ category: 'Chat', action: 'Copy Link', label: 'Share Link' });
+          
+          // Track link copy
+          ReactGA.event({
+            category: 'Chat',
+            action: 'Copy Link',
+            label: 'Share Link'
+          });
         })
-        .catch(() => copyToClipboardFallback(fullLink));
+        .catch(() => {
+          copyToClipboardFallback(fullLink);
+        });
     } else {
       copyToClipboardFallback(fullLink);
     }
@@ -907,6 +1163,7 @@ function App() {
     textArea.style.left = '-999999px';
     document.body.appendChild(textArea);
     textArea.select();
+    
     try {
       document.execCommand('copy');
       setCopied(true);
@@ -914,6 +1171,7 @@ function App() {
     } catch (err) {
       alert(`Copy this link: ${text}`);
     }
+    
     document.body.removeChild(textArea);
   };
 
@@ -922,9 +1180,6 @@ function App() {
       setView('creator');
       setActiveConvId(null);
       setCurrentConv(null);
-      hasLoadedMessages.current = false;
-      // Clear pending messages when leaving chat
-      pendingMessages.current.clear();
       window.history.pushState({}, '', `/?creator=${myLinkId}`);
     } else {
       setView('home');
@@ -934,9 +1189,6 @@ function App() {
       setConversations([]);
       setCurrentConv(null);
       setIsCreator(false);
-      hasLoadedMessages.current = false;
-      pendingMessages.current.clear();
-      sentMessageIds.current.clear();
       window.history.pushState({}, '', '/');
     }
   };
@@ -946,7 +1198,6 @@ function App() {
       setView('creator');
       setActiveConvId(null);
       setCurrentConv(null);
-      hasLoadedMessages.current = false;
       window.history.pushState({}, '', `/?creator=${myLinkId}`);
     }
   };
@@ -955,12 +1206,14 @@ function App() {
     const date = new Date(timestamp);
     const now = new Date();
     const diff = now - date;
+    
     if (diff < 60000) return 'Just now';
     if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`;
     if (diff < 86400000) return `${Math.floor(diff / 3600000)}h ago`;
     return date.toLocaleDateString();
   };
 
+  // Loading state
   if (view === 'loading' || loading) {
     return (
       <div className="container">
@@ -974,25 +1227,38 @@ function App() {
     );
   }
 
+  // Home View
   if (view === 'home') {
     return (
       <div className="container">
         <div className="home-card">
+          {/* Active Chat Notification Button - Top Right */}
           {showNotification && myChatHistory.length > 0 && (
-            <button onClick={returnToActiveChat} className="active-chat-button" title="Return to active chat" />
+            <button 
+              onClick={returnToActiveChat}
+              className="active-chat-button"
+              title="Return to active chat"
+            >
+              <MessageCircle size={20} />
+              <span>Active Chat</span>
+            </button>
           )}
+
           <div className="logo-container">
             <MessageCircle size={48} color="#667eea" />
           </div>
           <h1 className="title">Anonymous Chat</h1>
           <p className="subtitle">Chat anonymously with anyone, no sign-up required</p>
+          
           <button onClick={createNewLink} className="primary-button" disabled={loading}>
             <Plus size={20} />
             <span>Create New Chat Link</span>
           </button>
+
           <div className="divider">
             <span className="divider-text">OR</span>
           </div>
+
           <input
             type="text"
             placeholder="Paste link ID to join"
@@ -1001,26 +1267,43 @@ function App() {
             onChange={(e) => setJoinLinkId(e.target.value)}
             onKeyPress={(e) => e.key === 'Enter' && joinWithLink()}
           />
-          <button onClick={joinWithLink} className="secondary-button">Join Chat</button>
+          
+          <button onClick={joinWithLink} className="secondary-button">
+            Join Chat
+          </button>
+
           {myLinks.length > 0 && (
             <>
               <div className="divider" style={{ marginTop: '32px' }}>
                 <span className="divider-text">MY CHAT LINKS</span>
               </div>
+              
               <div className="my-links-list">
                 {myLinks.map((link) => (
                   <div key={link.linkId} className="my-link-item">
                     <div className="my-link-info">
                       <div>
                         <div className="my-link-id">{link.linkId}</div>
-                        <div className="my-link-date">Created {formatTime(link.createdAt)}</div>
+                        <div className="my-link-date">
+                          Created {formatTime(link.createdAt)}
+                        </div>
                       </div>
                     </div>
                     <div className="my-link-actions">
-                      <button onClick={() => openExistingLink(link.linkId, link.creatorId)} className="my-link-open-btn">
+                      <button
+                        onClick={() => openExistingLink(link.linkId, link.creatorId)}
+                        className="my-link-open-btn"
+                      >
                         Open
                       </button>
-                      <button onClick={(e) => { e.stopPropagation(); removeMyLink(link.linkId); }} className="my-link-delete-btn" title="Remove from list">
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          removeMyLink(link.linkId);
+                        }}
+                        className="my-link-delete-btn"
+                        title="Remove from list"
+                      >
                         ×
                       </button>
                     </div>
@@ -1029,17 +1312,18 @@ function App() {
               </div>
             </>
           )}
+
           <div className="features">
             <p className="feature">🔒 Completely anonymous</p>
             <p className="feature">💬 Real-time messaging</p>
             <p className="feature">🚀 No account needed</p>
-            <p className="feature"><a href="https://ochat.fun/about.html">📃 More about Ochat</a></p>
           </div>
         </div>
       </div>
     );
   }
 
+  // Creator View
   if (view === 'creator') {
     return (
       <div className="container">
@@ -1047,10 +1331,15 @@ function App() {
           <div className="header">
             <div>
               <h2 className="header-title">Your Chat Link</h2>
-              <p className="header-subtitle">{conversations.length} conversation{conversations.length !== 1 ? 's' : ''}</p>
+              <p className="header-subtitle">
+                {conversations.length} conversation{conversations.length !== 1 ? 's' : ''}
+              </p>
             </div>
-            <button onClick={goBack} className="back-button">Home</button>
+            <button onClick={goBack} className="back-button">
+              Home
+            </button>
           </div>
+
           <div className="link-section">
             <div className="link-info">
               <span className="link-label">SHARE THIS LINK</span>
@@ -1061,6 +1350,7 @@ function App() {
               <span>{copied ? 'Copied!' : 'Copy'}</span>
             </button>
           </div>
+
           <div className="conversation-list">
             {conversations.length === 0 ? (
               <div className="empty-state">
@@ -1071,14 +1361,20 @@ function App() {
               </div>
             ) : (
               conversations.map((conv) => (
-                <div key={conv.id} className="conversation-item" onClick={() => openConversation(conv.id)}>
+                <div
+                  key={conv.id}
+                  className="conversation-item"
+                  onClick={() => openConversation(conv.id)}
+                >
                   <div className="avatar">
                     <User size={24} color="#667eea" />
                   </div>
                   <div className="conv-info">
                     <div className="conv-header">
                       <span className="conv-name">Anonymous User</span>
-                      <span className="conv-time">{formatTime(conv.lastMessage || conv.createdAt)}</span>
+                      <span className="conv-time">
+                        {formatTime(conv.lastMessage || conv.createdAt)}
+                      </span>
                     </div>
                     <p className="last-message">
                       {conv.messages && conv.messages.length > 0
@@ -1086,7 +1382,9 @@ function App() {
                         : 'No messages yet'}
                     </p>
                   </div>
-                  {conv.unreadCount > 0 && <div className="unread-badge">{conv.unreadCount}</div>}
+                  {conv.unreadCount > 0 && (
+                    <div className="unread-badge">{conv.unreadCount}</div>
+                  )}
                 </div>
               ))
             )}
@@ -1096,12 +1394,15 @@ function App() {
     );
   }
 
+  // Chat View
   if (view === 'chat') {
     return (
       <div className="container">
         <div className="app-container">
           <div className="chat-header">
-            <button onClick={goBack} className="back-button-small">←</button>
+            <button onClick={goBack} className="back-button-small">
+              ←
+            </button>
             {isCreator && (
               <button onClick={viewConversationList} className="list-button" title="View all conversations">
                 <List size={20} />
@@ -1112,17 +1413,23 @@ function App() {
                 <User size={20} color="#667eea" />
               </div>
               <div>
-                <h3 className="chat-title">{isCreator ? 'Anonymous User' : 'Chat Creator'}</h3>
+                <h3 className="chat-title">
+                  {isCreator ? 'Anonymous User' : 'Chat Creator'}
+                </h3>
                 {socketConnected && <p className="chat-status">● Online</p>}
               </div>
             </div>
           </div>
+
           {!socketConnected && (
             <div className="connection-warning">
               <span>⚠️ Connection lost. Messages will send when reconnected.</span>
-              <button onClick={() => socket?.connect()} className="reconnect-btn">Retry Now</button>
+              <button onClick={() => socket?.connect()} className="reconnect-btn">
+                Retry Now
+              </button>
             </div>
           )}
+
           <div className="messages-container">
             {!currentConv || currentConv.messages.length === 0 ? (
               <div className="empty-chat">
@@ -1131,7 +1438,13 @@ function App() {
               </div>
             ) : (
               currentConv.messages.map((msg, idx) => (
-                <div key={idx} className="message-wrapper" style={{ justifyContent: msg.isCreator === isCreator ? 'flex-end' : 'flex-start' }}>
+                <div
+                  key={idx}
+                  className="message-wrapper"
+                  style={{
+                    justifyContent: msg.isCreator === isCreator ? 'flex-end' : 'flex-start'
+                  }}
+                >
                   <div className={msg.isCreator === isCreator ? 'my-message' : 'their-message'}>
                     <p className="message-text">{msg.text}</p>
                     <div className="message-time">{formatTime(msg.timestamp)}</div>
@@ -1141,22 +1454,32 @@ function App() {
             )}
             <div ref={messagesEndRef} />
           </div>
+
           {typingUser && (
             <div className="typing-indicator">
               {typingUser === 'creator' && !isCreator && 'Chat creator is typing...'}
               {typingUser === 'anonymous' && isCreator && 'Anonymous user is typing...'}
             </div>
           )}
+
           <div className="input-container">
             <input
               type="text"
               placeholder={socketConnected ? "Type a message..." : "Offline - messages will send when reconnected"}
               className="message-input"
               value={message}
-              onChange={(e) => { setMessage(e.target.value); handleTyping(); }}
+              onChange={(e) => {
+                setMessage(e.target.value);
+                handleTyping();
+              }}
               onKeyPress={(e) => e.key === 'Enter' && sendMessageHandler()}
             />
-            <button onClick={sendMessageHandler} className="send-button" disabled={!message.trim()} title={socketConnected ? "Send message" : "Send when reconnected"}>
+            <button
+              onClick={sendMessageHandler}
+              className="send-button"
+              disabled={!message.trim()}
+              title={socketConnected ? "Send message" : "Send when reconnected"}
+            >
               <Send size={20} />
             </button>
           </div>
