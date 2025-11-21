@@ -10,7 +10,7 @@ import './app.css';
 const TRACKING_ID = 'G-FE98DD5ZS8'; // Replace with your GA4 Measurement ID
 ReactGA.initialize(TRACKING_ID);
 
-// // Detect if we're on mobile and use appropriate API URL
+// Detect if we're on mobile and use appropriate API URL
 // const getApiUrl = () => {
 //   if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
 //     return 'http://localhost:5000';
@@ -19,7 +19,7 @@ ReactGA.initialize(TRACKING_ID);
 // };
 
 const API_URL = "https://anonym-backend.onrender.com";
-let socket;
+let socket; 
 
 function App() {
   const [view, setView] = useState('loading'); // Start with loading state
@@ -1022,14 +1022,20 @@ function App() {
     }
     
     const messageText = message.trim();
+    const messageId = `temp_${Date.now()}_${Math.random()}`;
     const tempMessage = {
+      id: messageId,
       text: messageText,
       timestamp: Date.now(),
       isCreator: isCreator,
-      pending: !socket || !socket.connected
+      pending: !socket || !socket.connected,
+      isOptimistic: true // Mark as optimistic
     };
     
-    // Always add message to UI immediately (optimistic update)
+    // IMMEDIATELY save to localStorage FIRST
+    saveMessageToStorage(activeConvId, tempMessage);
+    
+    // Then update UI
     setCurrentConv(prev => {
       const updatedConv = {
         ...prev,
@@ -1037,7 +1043,7 @@ function App() {
         lastMessage: tempMessage.timestamp
       };
       
-      // Save to localStorage
+      // Save full conversation too
       saveConversationToStorage(updatedConv);
       
       return updatedConv;
@@ -1045,7 +1051,7 @@ function App() {
     
     setMessage('');
     
-    // If connected, send immediately
+    // If connected, send to server
     if (socket && socket.connected) {
       socket.emit('send-message', {
         convId: activeConvId,
