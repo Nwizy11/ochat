@@ -449,7 +449,6 @@ function App() {
     typingTimeoutRef.current = setTimeout(() => {
       if (socket) socket.emit('stop-typing', { convId: activeConvId });
     },1000);
- 1000;
   };
 
   const copyLink = () => {
