@@ -11,14 +11,14 @@ const TRACKING_ID = 'G-XXXXXXXXXX'; // Replace with your GA4 Measurement ID
 ReactGA.initialize(TRACKING_ID);
 
 // Detect if we're on mobile and use appropriate API URL
-const getApiUrl = () => {
-  if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
-    return 'http://localhost:5000';
-  }
-  return `http://${window.location.hostname}:5000`;
-};
+// const getApiUrl = () => {
+//   if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+//     return 'http://localhost:5000';
+//   }
+//   return `http://${window.location.hostname}:5000`;
+// };
 
-const API_URL = getApiUrl();
+const API_URL = "https://anonym-backend.onrender.com";
 let socket;
 
 function App() {
