@@ -1,16 +1,15 @@
-// src/App.js - Fixed version with no flash and better notification UI
+// src/App.js - Fixed version with proper real-time messaging
 import React, { useState, useEffect, useRef } from 'react';
 import { MessageCircle, Send, Copy, Check, Plus, User, List, Bell } from 'lucide-react';
 import io from 'socket.io-client';
 import axios from 'axios';
 import './app.css';
 
-// const API_URL = 'http://localhost:5000';
 const API_URL = 'https://anonym-backend.onrender.com';
 let socket;
 
 function App() {
-  const [view, setView] = useState('loading'); // Start with loading state
+  const [view, setView] = useState('loading');
   const [myLinkId, setMyLinkId] = useState(null);
   const [myCreatorId, setMyCreatorId] = useState(null);
   const [activeConvId, setActiveConvId] = useState(null);
@@ -29,11 +28,9 @@ function App() {
   const messagesEndRef = useRef(null);
   const typingTimeoutRef = useRef(null);
   const audioContextRef = useRef(null);
-  const lastMessageCountRef = useRef(0);
 
   // Initialize audio context for notification sound
   useEffect(() => {
-    // Create audio context (modern way to generate sounds)
     audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)();
     
     return () => {
@@ -55,7 +52,6 @@ function App() {
       oscillator.connect(gainNode);
       gainNode.connect(ctx.destination);
       
-      // Create a pleasant notification sound (two-tone)
       oscillator.frequency.setValueAtTime(800, ctx.currentTime);
       oscillator.frequency.setValueAtTime(600, ctx.currentTime + 0.1);
       
@@ -69,7 +65,6 @@ function App() {
     }
   };
 
-  // Check if page is visible
   const isPageVisible = () => {
     return document.visibilityState === 'visible';
   };
@@ -128,12 +123,10 @@ function App() {
   // Check for saved creator session or direct link on mount
   useEffect(() => {
     const initializeApp = async () => {
-      // Check URL parameters FIRST before loading anything
       const urlParams = new URLSearchParams(window.location.search);
       const linkParam = urlParams.get('link');
       const creatorParam = urlParams.get('creator');
       
-      // Load saved data
       loadMyLinks();
       await loadMyChatHistory();
       
@@ -144,7 +137,6 @@ function App() {
         console.log('📎 Direct link detected:', linkParam);
         await handleDirectLink(linkParam);
       } else {
-        // No active session, go to home
         setView('home');
       }
     };
@@ -152,24 +144,18 @@ function App() {
     initializeApp();
   }, []);
 
-  // Load my links from localStorage
   const loadMyLinks = () => {
     try {
       const saved = localStorage.getItem('my_chat_links');
-      console.log('📚 Raw localStorage data:', saved);
       if (saved) {
         const links = JSON.parse(saved);
         setMyLinks(links);
-        console.log('📚 Loaded saved links:', links.length, links);
-      } else {
-        console.log('📚 No saved links found');
       }
     } catch (error) {
       console.error('Error loading links:', error);
     }
   };
 
-  // Save link to localStorage
   const saveMyLink = (linkId, creatorId) => {
     try {
       const saved = localStorage.getItem('my_chat_links');
@@ -185,14 +171,12 @@ function App() {
         const trimmedLinks = links.slice(0, 10);
         localStorage.setItem('my_chat_links', JSON.stringify(trimmedLinks));
         setMyLinks(trimmedLinks);
-        console.log('💾 Saved link:', linkId);
       }
     } catch (error) {
       console.error('Error saving link:', error);
     }
   };
 
-  // Remove link from localStorage
   const removeMyLink = (linkId) => {
     try {
       const saved = localStorage.getItem('my_chat_links');
@@ -201,14 +185,12 @@ function App() {
         const filtered = links.filter(l => l.linkId !== linkId);
         localStorage.setItem('my_chat_links', JSON.stringify(filtered));
         setMyLinks(filtered);
-        console.log('🗑️ Removed link:', linkId);
       }
     } catch (error) {
       console.error('Error removing link:', error);
     }
   };
 
-  // Restore creator session from URL
   const restoreCreatorSession = async (linkId) => {
     try {
       const response = await axios.get(`${API_URL}/api/links/${linkId}`);
@@ -224,8 +206,6 @@ function App() {
         
         const convResponse = await axios.get(`${API_URL}/api/links/${linkId}/conversations`);
         setConversations(convResponse.data.conversations || []);
-        
-        console.log('✅ Creator session restored');
       }
     } catch (error) {
       console.error('Error restoring session:', error);
@@ -234,26 +214,17 @@ function App() {
     }
   };
 
-  // Handle direct link access
   const handleDirectLink = async (linkId) => {
-    console.log('🔗 Handling direct link:', linkId);
-    
     const saved = localStorage.getItem('my_chat_history');
     const chatHistory = saved ? JSON.parse(saved) : [];
-    console.log('📚 Current chat history:', chatHistory);
     
     try {
       const existingChat = chatHistory.find(chat => chat.linkId === linkId);
-      console.log('🔍 Existing chat found:', existingChat);
       
       if (existingChat) {
-        console.log('♻️ Restoring conversation:', existingChat.convId);
-        
         try {
           const response = await axios.get(`${API_URL}/api/conversations/${existingChat.convId}`);
           const { conversation } = response.data;
-          
-          console.log('📦 Server returned conversation:', conversation);
           
           setActiveConvId(existingChat.convId);
           setIsCreator(false);
@@ -273,7 +244,6 @@ function App() {
           
           setTimeout(() => {
             if (socket && socket.connected) {
-              console.log('🔌 Joining conversation room:', existingChat.convId);
               socket.emit('join-conversation', { 
                 convId: existingChat.convId, 
                 isCreator: false 
@@ -287,7 +257,6 @@ function App() {
           await createNewConversation(linkId);
         }
       } else {
-        console.log('🆕 No existing chat, creating new conversation');
         await createNewConversation(linkId);
       }
     } catch (error) {
@@ -298,7 +267,6 @@ function App() {
     }
   };
 
-  // Create new conversation helper
   const createNewConversation = async (linkId) => {
     const verifyResponse = await axios.get(`${API_URL}/api/links/${linkId}/verify`);
     
@@ -320,8 +288,6 @@ function App() {
         convId: conversation.id, 
         isCreator: false 
       });
-      
-      console.log('✅ Created new conversation:', conversation.id);
     } else {
       alert('Invalid or expired link');
       window.history.replaceState({}, '', '/');
@@ -334,51 +300,31 @@ function App() {
     if (!socket) return;
 
     const handleLoadMessages = ({ messages }) => {
-      console.log('📥 Socket: Loading messages:', messages?.length || 0, messages);
+      console.log('📥 Socket: Loading messages:', messages?.length || 0);
       
-      if (activeConvId) {
-        setCurrentConv(prev => {
-          const updated = {
-            ...prev,
-            id: activeConvId,
-            messages: messages || []
-          };
-          console.log('💾 Updated currentConv:', updated);
-          return updated;
-        });
+      if (activeConvId && currentConv) {
+        setCurrentConv(prev => ({
+          ...prev,
+          messages: messages || []
+        }));
       }
     };
 
     const handleNewMessage = ({ convId, message: newMessage }) => {
-      console.log('📩 New message received:', {
-        convId,
-        activeConvId,
-        message: newMessage,
-        isForThisConv: convId === activeConvId
-      });
+      console.log('📩 New message received:', { convId, message: newMessage, activeConvId });
       
-      // Check if this is a message from the other person
       const isMessageFromOther = newMessage.isCreator !== isCreator;
       
       if (convId === activeConvId && currentConv) {
-        const previousMessageCount = currentConv.messages?.length || 0;
+        setCurrentConv(prev => ({
+          ...prev,
+          messages: [...(prev.messages || []), newMessage],
+          lastMessage: newMessage.timestamp
+        }));
         
-        setCurrentConv(prev => {
-          const updatedConv = {
-            ...prev,
-            messages: [...(prev.messages || []), newMessage],
-            lastMessage: newMessage.timestamp
-          };
-          console.log('💾 Updated conversation with new message:', updatedConv.messages.length);
-          return updatedConv;
-        });
-        
-        // Play sound if message is from other person and page is not visible
         if (isMessageFromOther && !isPageVisible()) {
-          console.log('🔔 Playing notification sound - page not visible');
           playNotificationSound();
           
-          // Show browser notification if permission granted
           if ('Notification' in window && Notification.permission === 'granted') {
             new Notification('New Message', {
               body: newMessage.text.substring(0, 50) + (newMessage.text.length > 50 ? '...' : ''),
@@ -400,9 +346,7 @@ function App() {
                 ? (conv.unreadCount || 0) + 1 
                 : (conv.unreadCount || 0);
               
-              // Play sound if not viewing this chat and message is from anonymous user
               if (shouldIncrementUnread && !isPageVisible()) {
-                console.log('🔔 Playing notification sound for creator - new conversation message');
                 playNotificationSound();
               }
               
@@ -594,8 +538,6 @@ function App() {
       });
       
       setConversations(convsWithUnread);
-      
-      console.log('✅ Chat link created');
     } catch (error) {
       console.error('Error creating link:', error);
       alert('Failed to create link. Please try again.');
@@ -632,8 +574,6 @@ function App() {
         });
         
         setConversations(convsWithUnread);
-        
-        console.log('✅ Opened existing link:', linkId);
       }
     } catch (error) {
       console.error('Error opening link:', error);
@@ -682,8 +622,6 @@ function App() {
         convId, 
         isCreator: true 
       });
-      
-      console.log('✅ Opened conversation:', convId);
     } catch (error) {
       console.error('Error opening conversation:', error);
       alert('Failed to open conversation');
@@ -710,7 +648,6 @@ function App() {
       const readStatus = JSON.parse(localStorage.getItem('chat_read_status') || '{}');
       return readStatus[convId] || null;
     } catch (error) {
-      console.error('Error getting read status:', error);
       return null;
     }
   };
@@ -742,7 +679,6 @@ function App() {
           resolve([]);
         }
       } catch (error) {
-        console.error('Error loading chat history:', error);
         resolve([]);
       }
     });
@@ -821,8 +757,25 @@ function App() {
     }
     
     const messageText = message.trim();
+    
+    // Create temporary message for immediate display
+    const tempMessage = {
+      id: Date.now() + Math.random(),
+      text: messageText,
+      isCreator,
+      timestamp: Date.now()
+    };
+    
+    // Add message to UI immediately
+    setCurrentConv(prev => ({
+      ...prev,
+      messages: [...(prev.messages || []), tempMessage],
+      lastMessage: Date.now()
+    }));
+    
     setMessage('');
     
+    // Send to server
     socket.emit('send-message', {
       convId: activeConvId,
       message: messageText,
@@ -925,7 +878,6 @@ function App() {
     return date.toLocaleDateString();
   };
 
-  // Loading state
   if (view === 'loading' || loading) {
     return (
       <div className="container">
@@ -939,20 +891,16 @@ function App() {
     );
   }
 
-  // Home View
   if (view === 'home') {
     return (
       <div className="container">
         <div className="home-card">
-          {/* Active Chat Notification Button - Top Right */}
           {showNotification && myChatHistory.length > 0 && (
             <button 
               onClick={returnToActiveChat}
               className="active-chat-button"
               title="Return to active chat"
             >
-              {/* <MessageCircle size={20} /> */}
-              {/* <span>Active Chat</span> */}
             </button>
           )}
 
@@ -1030,14 +978,12 @@ function App() {
             <p className="feature">💬 Real-time messaging</p>
             <p className="feature">🚀 No account needed</p>
             <p className="feature"><a href="https://ochat.fun/about.html">📃 More about Ochat </a></p>
-
           </div>
         </div>
       </div>
     );
   }
 
-  // Creator View
   if (view === 'creator') {
     return (
       <div className="container">
@@ -1108,7 +1054,6 @@ function App() {
     );
   }
 
-  // Chat View
   if (view === 'chat') {
     return (
       <div className="container">
