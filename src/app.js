@@ -1,16 +1,14 @@
-// src/App.js - Fixed version with no flash and better notification UI
+// src/App.js - COMPLETELY FIXED REAL-TIME MESSAGING
 import React, { useState, useEffect, useRef } from 'react';
-import { MessageCircle, Send, Copy, Check, Plus, User, List, Bell } from 'lucide-react';
+import { MessageCircle, Send, Copy, Check, Plus, User, List } from 'lucide-react';
 import io from 'socket.io-client';
 import axios from 'axios';
 import './app.css';
 
-// const API_URL = 'http://localhost:5000';
 const API_URL = 'https://anonym-backend.onrender.com';
-let socket;
 
 function App() {
-  const [view, setView] = useState('loading'); // Start with loading state
+  const [view, setView] = useState('loading');
   const [myLinkId, setMyLinkId] = useState(null);
   const [myCreatorId, setMyCreatorId] = useState(null);
   const [activeConvId, setActiveConvId] = useState(null);
@@ -26,16 +24,17 @@ function App() {
   const [myLinks, setMyLinks] = useState([]);
   const [myChatHistory, setMyChatHistory] = useState([]);
   const [showNotification, setShowNotification] = useState(false);
+  
   const messagesEndRef = useRef(null);
   const typingTimeoutRef = useRef(null);
   const audioContextRef = useRef(null);
-  const lastMessageCountRef = useRef(0);
+  const socketRef = useRef(null);
+  const messageQueueRef = useRef([]);
+  const reconnectTimeoutRef = useRef(null);
 
-  // Initialize audio context for notification sound
+  // Initialize audio context
   useEffect(() => {
-    // Create audio context (modern way to generate sounds)
     audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)();
-    
     return () => {
       if (audioContextRef.current) {
         audioContextRef.current.close();
@@ -46,7 +45,6 @@ function App() {
   // Play notification sound
   const playNotificationSound = () => {
     if (!audioContextRef.current) return;
-    
     try {
       const ctx = audioContextRef.current;
       const oscillator = ctx.createOscillator();
@@ -55,7 +53,6 @@ function App() {
       oscillator.connect(gainNode);
       gainNode.connect(ctx.destination);
       
-      // Create a pleasant notification sound (two-tone)
       oscillator.frequency.setValueAtTime(800, ctx.currentTime);
       oscillator.frequency.setValueAtTime(600, ctx.currentTime + 0.1);
       
@@ -69,29 +66,55 @@ function App() {
     }
   };
 
-  // Check if page is visible
-  const isPageVisible = () => {
-    return document.visibilityState === 'visible';
-  };
+  const isPageVisible = () => document.visibilityState === 'visible';
 
-  // Initialize socket connection
-  useEffect(() => {
+  // ✅ CRITICAL FIX: Initialize socket with proper cleanup and reconnection
+  const initializeSocket = () => {
+    if (socketRef.current?.connected) {
+      console.log('Socket already connected');
+      return socketRef.current;
+    }
+
     console.log('🔌 Initializing socket connection to:', API_URL);
     
-    socket = io(API_URL, {
+    const socket = io(API_URL, {
       reconnection: true,
       reconnectionDelay: 1000,
-      reconnectionAttempts: 10,
-      transports: ['websocket', 'polling']
+      reconnectionDelayMax: 5000,
+      reconnectionAttempts: Infinity,
+      transports: ['websocket', 'polling'],
+      upgrade: true,
+      forceNew: false
     });
     
     socket.on('connect', () => {
       console.log('✅ Connected to server, socket ID:', socket.id);
       setSocketConnected(true);
+      
+      // Rejoin conversation if we were in one
+      if (activeConvId) {
+        console.log('♻️ Rejoining conversation:', activeConvId);
+        socket.emit('join-conversation', { 
+          convId: activeConvId, 
+          isCreator 
+        });
+      }
+      
+      // Rejoin link if creator
+      if (myLinkId && myCreatorId && isCreator) {
+        console.log('♻️ Rejoining link:', myLinkId);
+        socket.emit('join-link', { linkId: myLinkId, creatorId: myCreatorId });
+      }
+
+      // Process queued messages
+      while (messageQueueRef.current.length > 0) {
+        const queuedMsg = messageQueueRef.current.shift();
+        socket.emit('send-message', queuedMsg);
+      }
     });
     
-    socket.on('disconnect', () => {
-      console.log('⚠️ Disconnected from server');
+    socket.on('disconnect', (reason) => {
+      console.log('⚠️ Disconnected from server:', reason);
       setSocketConnected(false);
     });
     
@@ -102,49 +125,198 @@ function App() {
     
     socket.on('reconnect', (attemptNumber) => {
       console.log('🔄 Reconnected after', attemptNumber, 'attempts');
-      setSocketConnected(true);
+    });
+    
+    // ✅ CRITICAL: Handle incoming messages
+    socket.on('new-message', ({ convId, message: newMessage }) => {
+      console.log('📩 Received new-message event:', { convId, message: newMessage, activeConvId });
       
-      if (activeConvId) {
-        console.log('♻️ Rejoining conversation:', activeConvId);
-        socket.emit('join-conversation', { 
-          convId: activeConvId, 
-          isCreator 
+      if (convId === activeConvId) {
+        setCurrentConv(prev => {
+          if (!prev) return prev;
+          
+          // Check if message already exists (avoid duplicates)
+          const messageExists = prev.messages?.some(m => m.id === newMessage.id);
+          if (messageExists) {
+            console.log('⚠️ Message already exists, skipping:', newMessage.id);
+            return prev;
+          }
+          
+          const updated = {
+            ...prev,
+            messages: [...(prev.messages || []), newMessage],
+            lastMessage: newMessage.timestamp
+          };
+          console.log('💾 Updated currentConv, new message count:', updated.messages.length);
+          return updated;
         });
+        
+        // Play sound if message is from other person
+        if (newMessage.isCreator !== isCreator && !isPageVisible()) {
+          playNotificationSound();
+          if ('Notification' in window && Notification.permission === 'granted') {
+            new Notification('New Message', {
+              body: newMessage.text.substring(0, 50) + (newMessage.text.length > 50 ? '...' : ''),
+              icon: '/favicon.ico',
+              tag: 'chat-message'
+            });
+          }
+        }
+      }
+      
+      // Update conversations list if creator
+      if (isCreator) {
+        setConversations(prev => 
+          prev.map(conv => {
+            if (conv.id === convId) {
+              const isViewingThisChat = (activeConvId === convId);
+              const shouldIncrementUnread = !newMessage.isCreator && !isViewingThisChat;
+              
+              if (shouldIncrementUnread && !isPageVisible()) {
+                playNotificationSound();
+              }
+              
+              return {
+                ...conv,
+                messages: [...(conv.messages || []), newMessage],
+                lastMessage: newMessage.timestamp,
+                unreadCount: shouldIncrementUnread ? (conv.unreadCount || 0) + 1 : (conv.unreadCount || 0)
+              };
+            }
+            return conv;
+          })
+        );
       }
     });
-    
-    socket.on('error', (error) => {
-      console.error('🔴 Socket error:', error);
+
+    socket.on('load-messages', ({ messages }) => {
+      console.log('📥 Loaded messages:', messages?.length || 0);
+      if (activeConvId) {
+        setCurrentConv(prev => ({
+          ...prev,
+          id: activeConvId,
+          messages: messages || []
+        }));
+      }
+    });
+
+    socket.on('user-typing', ({ isCreator: typingIsCreator }) => {
+      setTypingUser(typingIsCreator ? 'creator' : 'anonymous');
+      if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+      typingTimeoutRef.current = setTimeout(() => setTypingUser(null), 3000);
+    });
+
+    socket.on('user-stop-typing', () => {
+      setTypingUser(null);
+      if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+    });
+
+    socket.on('load-conversations', ({ conversations: convs }) => {
+      console.log('📋 Loaded conversations:', convs.length);
+      const conversationsWithUnread = convs.map(conv => ({
+        ...conv,
+        unreadCount: calculateUnreadCount(conv)
+      }));
+      setConversations(conversationsWithUnread || []);
+    });
+
+    socket.on('new-conversation', ({ conversation }) => {
+      console.log('🆕 New conversation added:', conversation.id);
+      setConversations(prev => {
+        const exists = prev.some(c => c.id === conversation.id);
+        if (exists) return prev;
+        return [...prev, { 
+          ...conversation, 
+          unreadCount: calculateUnreadCount(conversation)
+        }];
+      });
+    });
+
+    socket.on('conversation-updated', ({ conversation }) => {
+      console.log('🔄 Conversation updated:', conversation.id);
+      setConversations(prev => {
+        const exists = prev.some(c => c.id === conversation.id);
+        if (exists) {
+          return prev.map(conv => {
+            if (conv.id === conversation.id) {
+              const isViewingThisChat = (activeConvId === conversation.id);
+              
+              if (isViewingThisChat) {
+                return { ...conv, ...conversation, unreadCount: 0 };
+              }
+              
+              const oldMessageCount = conv.messages?.length || 0;
+              const newMessageCount = conversation.messages?.length || 0;
+              
+              if (newMessageCount > oldMessageCount) {
+                const newMessages = conversation.messages.slice(oldMessageCount);
+                const newUnreadCount = newMessages.filter(msg => !msg.isCreator).length;
+                return {
+                  ...conv,
+                  ...conversation,
+                  unreadCount: (conv.unreadCount || 0) + newUnreadCount
+                };
+              }
+              
+              return { ...conv, ...conversation };
+            }
+            return conv;
+          });
+        } else {
+          return [...prev, { 
+            ...conversation, 
+            unreadCount: conversation.messages?.filter(msg => !msg.isCreator).length || 0
+          }];
+        }
+      });
     });
     
+    socketRef.current = socket;
+    return socket;
+  };
+
+  // Initialize socket on mount
+  useEffect(() => {
+    initializeSocket();
+    
     return () => {
-      if (socket) {
-        console.log('🔌 Disconnecting socket');
-        socket.disconnect();
+      if (socketRef.current) {
+        console.log('🔌 Cleaning up socket');
+        socketRef.current.disconnect();
+        socketRef.current = null;
+      }
+      if (reconnectTimeoutRef.current) {
+        clearTimeout(reconnectTimeoutRef.current);
       }
     };
   }, []);
 
+  // Rejoin conversation when activeConvId changes
+  useEffect(() => {
+    if (activeConvId && socketRef.current?.connected) {
+      console.log('🔗 Joining conversation:', activeConvId);
+      socketRef.current.emit('join-conversation', { 
+        convId: activeConvId, 
+        isCreator 
+      });
+    }
+  }, [activeConvId, isCreator]);
+
   // Check for saved creator session or direct link on mount
   useEffect(() => {
     const initializeApp = async () => {
-      // Check URL parameters FIRST before loading anything
       const urlParams = new URLSearchParams(window.location.search);
       const linkParam = urlParams.get('link');
       const creatorParam = urlParams.get('creator');
       
-      // Load saved data
       loadMyLinks();
       await loadMyChatHistory();
       
       if (creatorParam) {
-        console.log('🔄 Restoring creator session:', creatorParam);
         await restoreCreatorSession(creatorParam);
       } else if (linkParam) {
-        console.log('📎 Direct link detected:', linkParam);
         await handleDirectLink(linkParam);
       } else {
-        // No active session, go to home
         setView('home');
       }
     };
@@ -152,47 +324,54 @@ function App() {
     initializeApp();
   }, []);
 
-  // Load my links from localStorage
+  // Auto scroll
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [currentConv?.messages]);
+
+  // Request notification permission
+  useEffect(() => {
+    if ('Notification' in window && Notification.permission === 'default') {
+      Notification.requestPermission();
+    }
+  }, []);
+
+  // Show notification for active chats
+  useEffect(() => {
+    if (view === 'home' && !isCreator) {
+      setShowNotification(myChatHistory.length > 0);
+    } else {
+      setShowNotification(false);
+    }
+  }, [view, myChatHistory, isCreator]);
+
   const loadMyLinks = () => {
     try {
       const saved = localStorage.getItem('my_chat_links');
-      console.log('📚 Raw localStorage data:', saved);
       if (saved) {
-        const links = JSON.parse(saved);
-        setMyLinks(links);
-        console.log('📚 Loaded saved links:', links.length, links);
-      } else {
-        console.log('📚 No saved links found');
+        setMyLinks(JSON.parse(saved));
       }
     } catch (error) {
       console.error('Error loading links:', error);
     }
   };
 
-  // Save link to localStorage
   const saveMyLink = (linkId, creatorId) => {
     try {
       const saved = localStorage.getItem('my_chat_links');
       const links = saved ? JSON.parse(saved) : [];
       
       if (!links.some(l => l.linkId === linkId)) {
-        links.unshift({
-          linkId,
-          creatorId,
-          createdAt: Date.now()
-        });
-        
+        links.unshift({ linkId, creatorId, createdAt: Date.now() });
         const trimmedLinks = links.slice(0, 10);
         localStorage.setItem('my_chat_links', JSON.stringify(trimmedLinks));
         setMyLinks(trimmedLinks);
-        console.log('💾 Saved link:', linkId);
       }
     } catch (error) {
       console.error('Error saving link:', error);
     }
   };
 
-  // Remove link from localStorage
   const removeMyLink = (linkId) => {
     try {
       const saved = localStorage.getItem('my_chat_links');
@@ -201,14 +380,12 @@ function App() {
         const filtered = links.filter(l => l.linkId !== linkId);
         localStorage.setItem('my_chat_links', JSON.stringify(filtered));
         setMyLinks(filtered);
-        console.log('🗑️ Removed link:', linkId);
       }
     } catch (error) {
       console.error('Error removing link:', error);
     }
   };
 
-  // Restore creator session from URL
   const restoreCreatorSession = async (linkId) => {
     try {
       const response = await axios.get(`${API_URL}/api/links/${linkId}`);
@@ -220,12 +397,12 @@ function App() {
         setIsCreator(true);
         setView('creator');
         
-        socket.emit('join-link', { linkId, creatorId: link.creatorId });
+        if (socketRef.current?.connected) {
+          socketRef.current.emit('join-link', { linkId, creatorId: link.creatorId });
+        }
         
         const convResponse = await axios.get(`${API_URL}/api/links/${linkId}/conversations`);
         setConversations(convResponse.data.conversations || []);
-        
-        console.log('✅ Creator session restored');
       }
     } catch (error) {
       console.error('Error restoring session:', error);
@@ -234,79 +411,52 @@ function App() {
     }
   };
 
-  // Handle direct link access
   const handleDirectLink = async (linkId) => {
-    console.log('🔗 Handling direct link:', linkId);
-    
     const saved = localStorage.getItem('my_chat_history');
     const chatHistory = saved ? JSON.parse(saved) : [];
-    console.log('📚 Current chat history:', chatHistory);
     
     try {
       const existingChat = chatHistory.find(chat => chat.linkId === linkId);
-      console.log('🔍 Existing chat found:', existingChat);
       
       if (existingChat) {
-        console.log('♻️ Restoring conversation:', existingChat.convId);
-        
         try {
           const response = await axios.get(`${API_URL}/api/conversations/${existingChat.convId}`);
           const { conversation } = response.data;
           
-          console.log('📦 Server returned conversation:', conversation);
-          
           setActiveConvId(existingChat.convId);
           setIsCreator(false);
-          
-          const convData = {
+          setCurrentConv({
             id: existingChat.convId,
             linkId: conversation.linkId,
             messages: conversation.messages || [],
             createdAt: conversation.createdAt,
             lastMessage: conversation.lastMessage
-          };
-          
-          setCurrentConv(convData);
+          });
           setView('chat');
           
           updateChatHistoryActivity(existingChat.convId);
           
-          setTimeout(() => {
-            if (socket && socket.connected) {
-              console.log('🔌 Joining conversation room:', existingChat.convId);
-              socket.emit('join-conversation', { 
-                convId: existingChat.convId, 
-                isCreator: false 
-              });
-            }
-          }, 100);
-          
         } catch (error) {
-          console.error('❌ Failed to restore conversation:', error);
+          console.error('Failed to restore conversation:', error);
           removeChatHistory(existingChat.convId);
           await createNewConversation(linkId);
         }
       } else {
-        console.log('🆕 No existing chat, creating new conversation');
         await createNewConversation(linkId);
       }
     } catch (error) {
-      console.error('❌ Error in handleDirectLink:', error);
+      console.error('Error in handleDirectLink:', error);
       alert('Invalid link or server error');
       window.history.replaceState({}, '', '/');
       setView('home');
     }
   };
 
-  // Create new conversation helper
   const createNewConversation = async (linkId) => {
     const verifyResponse = await axios.get(`${API_URL}/api/links/${linkId}/verify`);
     
     if (verifyResponse.data.exists) {
-      const response = await axios.post(`${API_URL}/api/conversations/create`, {
-        linkId: linkId
-      });
-      
+      const response = await axios.post(`${API_URL}/api/conversations/create`, { linkId });
       const { conversation } = response.data;
       
       setActiveConvId(conversation.id);
@@ -315,13 +465,6 @@ function App() {
       setView('chat');
       
       saveChatHistory(linkId, conversation.id);
-      
-      socket.emit('join-conversation', { 
-        convId: conversation.id, 
-        isCreator: false 
-      });
-      
-      console.log('✅ Created new conversation:', conversation.id);
     } else {
       alert('Invalid or expired link');
       window.history.replaceState({}, '', '/');
@@ -329,376 +472,10 @@ function App() {
     }
   };
 
-  // Load messages for current conversation with real-time updates
-  useEffect(() => {
-    if (!socket) return;
-
-    const handleLoadMessages = ({ messages }) => {
-      console.log('📥 Socket: Loading messages:', messages?.length || 0, messages);
-      
-      if (activeConvId) {
-        setCurrentConv(prev => {
-          const updated = {
-            ...prev,
-            id: activeConvId,
-            messages: messages || []
-          };
-          console.log('💾 Updated currentConv:', updated);
-          return updated;
-        });
-      }
-    };
-
-    const handleNewMessage = ({ convId, message: newMessage }) => {
-      console.log('📩 New message received:', {
-        convId,
-        activeConvId,
-        message: newMessage,
-        isForThisConv: convId === activeConvId
-      });
-      
-      // Check if this is a message from the other person
-      const isMessageFromOther = newMessage.isCreator !== isCreator;
-      
-      if (convId === activeConvId && currentConv) {
-        const previousMessageCount = currentConv.messages?.length || 0;
-        
-        setCurrentConv(prev => {
-          const updatedConv = {
-            ...prev,
-            messages: [...(prev.messages || []), newMessage],
-            lastMessage: newMessage.timestamp
-          };
-          console.log('💾 Updated conversation with new message:', updatedConv.messages.length);
-          return updatedConv;
-        });
-        
-        // Play sound if message is from other person and page is not visible
-        if (isMessageFromOther && !isPageVisible()) {
-          console.log('🔔 Playing notification sound - page not visible');
-          playNotificationSound();
-          
-          // Show browser notification if permission granted
-          if ('Notification' in window && Notification.permission === 'granted') {
-            new Notification('New Message', {
-              body: newMessage.text.substring(0, 50) + (newMessage.text.length > 50 ? '...' : ''),
-              icon: '/favicon.ico',
-              tag: 'chat-message',
-              requireInteraction: false
-            });
-          }
-        }
-      }
-      
-      if (isCreator) {
-        setConversations(prev => 
-          prev.map(conv => {
-            if (conv.id === convId) {
-              const isViewingThisChat = (view === 'chat' && activeConvId === convId);
-              const shouldIncrementUnread = !newMessage.isCreator && !isViewingThisChat;
-              const newUnreadCount = shouldIncrementUnread 
-                ? (conv.unreadCount || 0) + 1 
-                : (conv.unreadCount || 0);
-              
-              // Play sound if not viewing this chat and message is from anonymous user
-              if (shouldIncrementUnread && !isPageVisible()) {
-                console.log('🔔 Playing notification sound for creator - new conversation message');
-                playNotificationSound();
-              }
-              
-              return {
-                ...conv,
-                messages: [...(conv.messages || []), newMessage],
-                lastMessage: newMessage.timestamp,
-                unreadCount: newUnreadCount
-              };
-            }
-            return conv;
-          })
-        );
-      }
-    };
-
-    const handleUserTyping = ({ isCreator: typingIsCreator }) => {
-      setTypingUser(typingIsCreator ? 'creator' : 'anonymous');
-      if (typingTimeoutRef.current) {
-        clearTimeout(typingTimeoutRef.current);
-      }
-      typingTimeoutRef.current = setTimeout(() => setTypingUser(null), 3000);
-    };
-
-    const handleUserStopTyping = () => {
-      setTypingUser(null);
-      if (typingTimeoutRef.current) {
-        clearTimeout(typingTimeoutRef.current);
-      }
-    };
-
-    socket.on('load-messages', handleLoadMessages);
-    socket.on('new-message', handleNewMessage);
-    socket.on('user-typing', handleUserTyping);
-    socket.on('user-stop-typing', handleUserStopTyping);
-
-    return () => {
-      socket.off('load-messages', handleLoadMessages);
-      socket.off('new-message', handleNewMessage);
-      socket.off('user-typing', handleUserTyping);
-      socket.off('user-stop-typing', handleUserStopTyping);
-    };
-  }, [currentConv, isCreator, view, activeConvId]);
-
-  // Load conversations for creator with real-time updates
-  useEffect(() => {
-    if (!socket || !myLinkId || view !== 'creator') return;
-
-    const handleLoadConversations = ({ conversations: convs }) => {
-      console.log('📋 Loaded conversations:', convs.length);
-      const conversationsWithUnread = convs.map(conv => {
-        const unreadCount = calculateUnreadCount(conv);
-        return {
-          ...conv,
-          unreadCount
-        };
-      });
-      setConversations(conversationsWithUnread || []);
-    };
-
-    const handleNewConversation = ({ conversation }) => {
-      console.log('🆕 New conversation added:', conversation.id);
-      setConversations(prev => {
-        const exists = prev.some(c => c.id === conversation.id);
-        if (exists) return prev;
-        
-        const unreadCount = calculateUnreadCount(conversation);
-        
-        return [...prev, { 
-          ...conversation, 
-          unreadCount 
-        }];
-      });
-    };
-
-    const handleConversationUpdated = ({ conversation }) => {
-      console.log('🔄 Conversation updated:', conversation.id);
-      setConversations(prev => {
-        const exists = prev.some(c => c.id === conversation.id);
-        if (exists) {
-          return prev.map(conv => {
-            if (conv.id === conversation.id) {
-              const isViewingThisChat = (view === 'chat' && activeConvId === conversation.id);
-              
-              if (isViewingThisChat) {
-                return {
-                  ...conv,
-                  ...conversation,
-                  unreadCount: 0
-                };
-              }
-              
-              const oldMessageCount = conv.messages?.length || 0;
-              const newMessageCount = conversation.messages?.length || 0;
-              
-              if (newMessageCount > oldMessageCount) {
-                const newMessages = conversation.messages.slice(oldMessageCount);
-                const newUnreadCount = newMessages.filter(msg => !msg.isCreator).length;
-                const totalUnread = (conv.unreadCount || 0) + newUnreadCount;
-                
-                return {
-                  ...conv,
-                  ...conversation,
-                  unreadCount: totalUnread
-                };
-              }
-              
-              return {
-                ...conv,
-                ...conversation,
-                unreadCount: conv.unreadCount || 0
-              };
-            }
-            return conv;
-          });
-        } else {
-          const unreadCount = conversation.messages 
-            ? conversation.messages.filter(msg => !msg.isCreator).length 
-            : 0;
-          
-          return [...prev, { 
-            ...conversation, 
-            unreadCount 
-          }];
-        }
-      });
-    };
-
-    socket.on('load-conversations', handleLoadConversations);
-    socket.on('new-conversation', handleNewConversation);
-    socket.on('conversation-updated', handleConversationUpdated);
-
-    return () => {
-      socket.off('load-conversations', handleLoadConversations);
-      socket.off('new-conversation', handleNewConversation);
-      socket.off('conversation-updated', handleConversationUpdated);
-    };
-  }, [socket, myLinkId, view, activeConvId]);
-
-  // Auto scroll to bottom
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [currentConv?.messages]);
-
-  // Request notification permission on mount
-  useEffect(() => {
-    if ('Notification' in window && Notification.permission === 'default') {
-      Notification.requestPermission().then(permission => {
-        console.log('🔔 Notification permission:', permission);
-      });
-    }
-  }, []);
-
-  // Check if user has active chat and show notification
-  useEffect(() => {
-    if (view === 'home' && !isCreator) {
-      const hasActiveChat = myChatHistory.length > 0;
-      setShowNotification(hasActiveChat);
-    } else {
-      setShowNotification(false);
-    }
-  }, [view, myChatHistory, isCreator]);
-
-  const createNewLink = async () => {
-    setLoading(true);
-    try {
-      const response = await axios.post(`${API_URL}/api/links/create`);
-      const { linkId, creatorId } = response.data;
-      
-      setMyLinkId(linkId);
-      setMyCreatorId(creatorId);
-      setIsCreator(true);
-      setView('creator');
-      
-      saveMyLink(linkId, creatorId);
-      window.history.pushState({}, '', `/?creator=${linkId}`);
-      
-      socket.emit('join-link', { linkId, creatorId });
-      
-      const convResponse = await axios.get(`${API_URL}/api/links/${linkId}/conversations`);
-      const convs = convResponse.data.conversations || [];
-      
-      const convsWithUnread = convs.map(conv => {
-        const unreadCount = calculateUnreadCount(conv);
-        return {
-          ...conv,
-          unreadCount
-        };
-      });
-      
-      setConversations(convsWithUnread);
-      
-      console.log('✅ Chat link created');
-    } catch (error) {
-      console.error('Error creating link:', error);
-      alert('Failed to create link. Please try again.');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const openExistingLink = async (linkId, creatorId) => {
-    setLoading(true);
-    try {
-      const response = await axios.get(`${API_URL}/api/links/${linkId}`);
-      const { link } = response.data;
-      
-      if (link) {
-        setMyLinkId(linkId);
-        setMyCreatorId(creatorId);
-        setIsCreator(true);
-        setView('creator');
-        
-        window.history.pushState({}, '', `/?creator=${linkId}`);
-        
-        socket.emit('join-link', { linkId, creatorId });
-        
-        const convResponse = await axios.get(`${API_URL}/api/links/${linkId}/conversations`);
-        const convs = convResponse.data.conversations || [];
-        
-        const convsWithUnread = convs.map(conv => {
-          const unreadCount = calculateUnreadCount(conv);
-          return {
-            ...conv,
-            unreadCount
-          };
-        });
-        
-        setConversations(convsWithUnread);
-        
-        console.log('✅ Opened existing link:', linkId);
-      }
-    } catch (error) {
-      console.error('Error opening link:', error);
-      alert('This link no longer exists or has expired.');
-      removeMyLink(linkId);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const joinWithLink = async () => {
-    if (!joinLinkId.trim()) {
-      alert('Please enter a link ID');
-      return;
-    }
-    
-    window.location.href = `/?link=${joinLinkId}`;
-  };
-
-  const openConversation = async (convId) => {
-    setLoading(true);
-    try {
-      const response = await axios.get(`${API_URL}/api/conversations/${convId}`);
-      const { conversation } = response.data;
-      
-      setActiveConvId(convId);
-      setCurrentConv(conversation);
-      setView('chat');
-      
-      setConversations(prev => 
-        prev.map(conv => {
-          if (conv.id === convId) {
-            saveReadStatus(convId, conversation.messages?.length || 0);
-            
-            return {
-              ...conv,
-              unreadCount: 0,
-              lastReadTime: Date.now()
-            };
-          }
-          return conv;
-        })
-      );
-      
-      socket.emit('join-conversation', { 
-        convId, 
-        isCreator: true 
-      });
-      
-      console.log('✅ Opened conversation:', convId);
-    } catch (error) {
-      console.error('Error opening conversation:', error);
-      alert('Failed to open conversation');
-    } finally {
-      setLoading(false);
-    }
-  };
-
   const saveReadStatus = (convId, readUpToMessageCount) => {
     try {
       const readStatus = JSON.parse(localStorage.getItem('chat_read_status') || '{}');
-      readStatus[convId] = {
-        readUpToMessageCount,
-        timestamp: Date.now()
-      };
+      readStatus[convId] = { readUpToMessageCount, timestamp: Date.now() };
       localStorage.setItem('chat_read_status', JSON.stringify(readStatus));
     } catch (error) {
       console.error('Error saving read status:', error);
@@ -710,7 +487,6 @@ function App() {
       const readStatus = JSON.parse(localStorage.getItem('chat_read_status') || '{}');
       return readStatus[convId] || null;
     } catch (error) {
-      console.error('Error getting read status:', error);
       return null;
     }
   };
@@ -722,9 +498,7 @@ function App() {
     }
     
     const totalMessages = conv.messages?.length || 0;
-    if (totalMessages <= readStatus.readUpToMessageCount) {
-      return 0;
-    }
+    if (totalMessages <= readStatus.readUpToMessageCount) return 0;
     
     const newMessages = conv.messages.slice(readStatus.readUpToMessageCount);
     return newMessages.filter(m => !m.isCreator).length;
@@ -742,7 +516,6 @@ function App() {
           resolve([]);
         }
       } catch (error) {
-        console.error('Error loading chat history:', error);
         resolve([]);
       }
     });
@@ -758,7 +531,7 @@ function App() {
       if (existingIndex !== -1) {
         history[existingIndex] = {
           ...history[existingIndex],
-          convId: convId,
+          convId,
           lastActive: Date.now()
         };
       } else {
@@ -815,21 +588,45 @@ function App() {
     }
   };
 
+  // ✅ CRITICAL FIX: Optimistic UI update + queue messages if offline
   const sendMessageHandler = () => {
-    if (!message.trim() || !activeConvId || !socket || !socket.connected) {
-      return;
-    }
+    if (!message.trim() || !activeConvId) return;
     
     const messageText = message.trim();
     setMessage('');
     
-    socket.emit('send-message', {
-      convId: activeConvId,
-      message: messageText,
-      isCreator
-    });
+    // Create optimistic message
+    const optimisticMessage = {
+      id: Date.now() + Math.random(),
+      text: messageText,
+      isCreator,
+      timestamp: Date.now()
+    };
     
-    socket.emit('stop-typing', { convId: activeConvId });
+    // Add to UI immediately (optimistic update)
+    setCurrentConv(prev => ({
+      ...prev,
+      messages: [...(prev.messages || []), optimisticMessage],
+      lastMessage: Date.now()
+    }));
+    
+    // Send to server
+    if (socketRef.current?.connected) {
+      socketRef.current.emit('send-message', {
+        convId: activeConvId,
+        message: messageText,
+        isCreator
+      });
+      socketRef.current.emit('stop-typing', { convId: activeConvId });
+    } else {
+      // Queue message if disconnected
+      console.log('⚠️ Socket disconnected, queuing message');
+      messageQueueRef.current.push({
+        convId: activeConvId,
+        message: messageText,
+        isCreator
+      });
+    }
     
     if (!isCreator) {
       updateChatHistoryActivity(activeConvId);
@@ -837,32 +634,129 @@ function App() {
   };
 
   const handleTyping = () => {
-    if (!activeConvId || !socket) return;
+    if (!activeConvId || !socketRef.current?.connected) return;
     
-    socket.emit('typing', { convId: activeConvId, isCreator });
+    socketRef.current.emit('typing', { convId: activeConvId, isCreator });
     
-    if (typingTimeoutRef.current) {
-      clearTimeout(typingTimeoutRef.current);
-    }
+    if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
     typingTimeoutRef.current = setTimeout(() => {
-      if (socket) {
-        socket.emit('stop-typing', { convId: activeConvId });
+      if (socketRef.current?.connected) {
+        socketRef.current.emit('stop-typing', { convId: activeConvId });
       }
     }, 1000);
+  };
+
+  const createNewLink = async () => {
+    setLoading(true);
+    try {
+      const response = await axios.post(`${API_URL}/api/links/create`);
+      const { linkId, creatorId } = response.data;
+      
+      setMyLinkId(linkId);
+      setMyCreatorId(creatorId);
+      setIsCreator(true);
+      setView('creator');
+      
+      saveMyLink(linkId, creatorId);
+      window.history.pushState({}, '', `/?creator=${linkId}`);
+      
+      if (socketRef.current?.connected) {
+        socketRef.current.emit('join-link', { linkId, creatorId });
+      }
+      
+      const convResponse = await axios.get(`${API_URL}/api/links/${linkId}/conversations`);
+      const convs = convResponse.data.conversations || [];
+      setConversations(convs.map(conv => ({
+        ...conv,
+        unreadCount: calculateUnreadCount(conv)
+      })));
+    } catch (error) {
+      console.error('Error creating link:', error);
+      alert('Failed to create link. Please try again.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const openExistingLink = async (linkId, creatorId) => {
+    setLoading(true);
+    try {
+      const response = await axios.get(`${API_URL}/api/links/${linkId}`);
+      const { link } = response.data;
+      
+      if (link) {
+        setMyLinkId(linkId);
+        setMyCreatorId(creatorId);
+        setIsCreator(true);
+        setView('creator');
+        
+        window.history.pushState({}, '', `/?creator=${linkId}`);
+        
+        if (socketRef.current?.connected) {
+          socketRef.current.emit('join-link', { linkId, creatorId });
+        }
+        
+        const convResponse = await axios.get(`${API_URL}/api/links/${linkId}/conversations`);
+        const convs = convResponse.data.conversations || [];
+        setConversations(convs.map(conv => ({
+          ...conv,
+          unreadCount: calculateUnreadCount(conv)
+        })));
+      }
+    } catch (error) {
+      console.error('Error opening link:', error);
+      alert('This link no longer exists or has expired.');
+      removeMyLink(linkId);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const joinWithLink = async () => {
+    if (!joinLinkId.trim()) {
+      alert('Please enter a link ID');
+      return;
+    }
+    window.location.href = `/?link=${joinLinkId}`;
+  };
+
+  const openConversation = async (convId) => {
+    setLoading(true);
+    try {
+      const response = await axios.get(`${API_URL}/api/conversations/${convId}`);
+      const { conversation } = response.data;
+      
+      setActiveConvId(convId);
+      setCurrentConv(conversation);
+      setView('chat');
+      
+      setConversations(prev => 
+        prev.map(conv => {
+          if (conv.id === convId) {
+            saveReadStatus(convId, conversation.messages?.length || 0);
+            return { ...conv, unreadCount: 0, lastReadTime: Date.now() };
+          }
+          return conv;
+        })
+      );
+    } catch (error) {
+      console.error('Error opening conversation:', error);
+      alert('Failed to open conversation');
+    } finally {
+      setLoading(false);
+    }
   };
 
   const copyLink = () => {
     const fullLink = `${window.location.origin}/?link=${myLinkId}`;
     
-    if (navigator.clipboard && navigator.clipboard.writeText) {
+    if (navigator.clipboard?.writeText) {
       navigator.clipboard.writeText(fullLink)
         .then(() => {
           setCopied(true);
           setTimeout(() => setCopied(false), 2000);
         })
-        .catch(() => {
-          copyToClipboardFallback(fullLink);
-        });
+        .catch(() => copyToClipboardFallback(fullLink));
     } else {
       copyToClipboardFallback(fullLink);
     }
@@ -925,7 +819,6 @@ function App() {
     return date.toLocaleDateString();
   };
 
-  // Loading state
   if (view === 'loading' || loading) {
     return (
       <div className="container">
@@ -939,21 +832,16 @@ function App() {
     );
   }
 
-  // Home View
   if (view === 'home') {
     return (
       <div className="container">
         <div className="home-card">
-          {/* Active Chat Notification Button - Top Right */}
           {showNotification && myChatHistory.length > 0 && (
             <button 
               onClick={returnToActiveChat}
               className="active-chat-button"
               title="Return to active chat"
-            >
-              {/* <MessageCircle size={20} /> */}
-              {/* <span>Active Chat</span> */}
-            </button>
+            />
           )}
 
           <div className="logo-container">
@@ -1030,14 +918,12 @@ function App() {
             <p className="feature">💬 Real-time messaging</p>
             <p className="feature">🚀 No account needed</p>
             <p className="feature"><a href="https://ochat.fun/about.html">📃 More about Ochat </a></p>
-
           </div>
         </div>
       </div>
     );
   }
 
-  // Creator View
   if (view === 'creator') {
     return (
       <div className="container">
@@ -1108,7 +994,6 @@ function App() {
     );
   }
 
-  // Chat View
   if (view === 'chat') {
     return (
       <div className="container">
@@ -1138,7 +1023,7 @@ function App() {
           {!socketConnected && (
             <div className="connection-warning">
               <span>⚠️ Disconnected from server</span>
-              <button onClick={() => socket?.connect()} className="reconnect-btn">
+              <button onClick={() => initializeSocket()} className="reconnect-btn">
                 Reconnect
               </button>
             </div>
@@ -1153,7 +1038,7 @@ function App() {
             ) : (
               currentConv.messages.map((msg, idx) => (
                 <div
-                  key={idx}
+                  key={msg.id || idx}
                   className="message-wrapper"
                   style={{
                     justifyContent: msg.isCreator === isCreator ? 'flex-end' : 'flex-start'
