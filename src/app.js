@@ -3,22 +3,10 @@ import React, { useState, useEffect, useRef } from 'react';
 import { MessageCircle, Send, Copy, Check, Plus, User, List, Bell } from 'lucide-react';
 import io from 'socket.io-client';
 import axios from 'axios';
-import ReactGA from 'react-ga4';
 import './app.css';
 
-// Initialize Google Analytics
-const TRACKING_ID = 'G-XXXXXXXXXX'; // Replace with your GA4 Measurement ID
-ReactGA.initialize(TRACKING_ID);
-
-// Detect if we're on mobile and use appropriate API URL
-// const getApiUrl = () => {
-//   if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
-//     return 'http://localhost:5000';
-//   }
-//   return `http://${window.location.hostname}:5000`;
-// };
-
-const API_URL = "https://anonym-backend.onrender.com";
+const API_URL = 'http://localhost:5000';
+// const API_URL = 'https://anonym-backend.onrender.com';
 let socket;
 
 function App() {
@@ -42,8 +30,6 @@ function App() {
   const typingTimeoutRef = useRef(null);
   const audioContextRef = useRef(null);
   const lastMessageCountRef = useRef(0);
-  const reconnectAttempts = useRef(0);
-  const pendingMessages = useRef([]);
 
   // Initialize audio context for notification sound
   useEffect(() => {
@@ -88,169 +74,35 @@ function App() {
     return document.visibilityState === 'visible';
   };
 
-  const saveReadStatus = (convId, readUpToMessageCount) => {
-    try {
-      const readStatus = JSON.parse(localStorage.getItem('chat_read_status') || '{}');
-      readStatus[convId] = {
-        readUpToMessageCount,
-        timestamp: Date.now()
-      };
-      localStorage.setItem('chat_read_status', JSON.stringify(readStatus));
-    } catch (error) {
-      console.error('Error saving read status:', error);
-    }
-  };
-
-  const getReadStatus = (convId) => {
-    try {
-      const readStatus = JSON.parse(localStorage.getItem('chat_read_status') || '{}');
-      return readStatus[convId] || null;
-    } catch (error) {
-      console.error('Error getting read status:', error);
-      return null;
-    }
-  };
-
-  const calculateUnreadCount = (conv) => {
-    const readStatus = getReadStatus(conv.id);
-    if (!readStatus) {
-      return conv.messages ? conv.messages.filter(m => !m.isCreator).length : 0;
-    }
-    
-    const totalMessages = conv.messages?.length || 0;
-    if (totalMessages <= readStatus.readUpToMessageCount) {
-      return 0;
-    }
-    
-    const newMessages = conv.messages.slice(readStatus.readUpToMessageCount);
-    return newMessages.filter(m => !m.isCreator).length;
-  };
-
-  // Save conversation to localStorage (MORE AGGRESSIVE)
-  const saveConversationToStorage = (conversation) => {
-    try {
-      if (conversation && conversation.id) {
-        const storageKey = `conversation_${conversation.id}`;
-        const dataToSave = {
-          id: conversation.id,
-          linkId: conversation.linkId,
-          messages: conversation.messages || [],
-          lastMessage: conversation.lastMessage,
-          createdAt: conversation.createdAt,
-          savedAt: Date.now(),
-          version: 1
-        };
-        localStorage.setItem(storageKey, JSON.stringify(dataToSave));
-        console.log('💾 Saved conversation to localStorage:', conversation.id, 'Messages:', dataToSave.messages.length);
-      }
-    } catch (error) {
-      console.error('Error saving conversation:', error);
-    }
-  };
-
-  // Load conversation from localStorage
-  const loadConversationFromStorage = (convId) => {
-    try {
-      const storageKey = `conversation_${convId}`;
-      const saved = localStorage.getItem(storageKey);
-      if (saved) {
-        const conversation = JSON.parse(saved);
-        console.log('📂 Loaded conversation from localStorage:', convId, 'Messages:', conversation.messages?.length || 0);
-        return conversation;
-      }
-    } catch (error) {
-      console.error('Error loading conversation:', error);
-    }
-    return null;
-  };
-
-  // Save message immediately to localStorage (BACKUP)
-  const saveMessageToStorage = (convId, message) => {
-    try {
-      const storageKey = `conversation_${convId}`;
-      const saved = localStorage.getItem(storageKey);
-      
-      let conversation;
-      if (saved) {
-        conversation = JSON.parse(saved);
-      } else {
-        conversation = {
-          id: convId,
-          messages: [],
-          createdAt: Date.now()
-        };
-      }
-      
-      // Check if message already exists
-      const messageExists = conversation.messages.some(msg => 
-        msg.text === message.text && 
-        msg.isCreator === message.isCreator &&
-        Math.abs(msg.timestamp - message.timestamp) < 2000
-      );
-      
-      if (!messageExists) {
-        conversation.messages.push(message);
-        conversation.lastMessage = message.timestamp;
-        conversation.savedAt = Date.now();
-        localStorage.setItem(storageKey, JSON.stringify(conversation));
-        console.log('💾 Message saved to localStorage backup');
-      }
-    } catch (error) {
-      console.error('Error saving message to storage:', error);
-    }
-  };
-
   // Initialize socket connection
   useEffect(() => {
     console.log('🔌 Initializing socket connection to:', API_URL);
     
-    // Track page view on mount
-    ReactGA.send({ hitType: "pageview", page: window.location.pathname + window.location.search });
-    
     socket = io(API_URL, {
       reconnection: true,
       reconnectionDelay: 1000,
-      reconnectionDelayMax: 5000,
-      reconnectionAttempts: Infinity,
-      timeout: 10000,
+      reconnectionAttempts: 10,
       transports: ['websocket', 'polling']
     });
     
     socket.on('connect', () => {
       console.log('✅ Connected to server, socket ID:', socket.id);
       setSocketConnected(true);
-      reconnectAttempts.current = 0;
-      
-      // Send any pending messages
-      if (pendingMessages.current.length > 0 && activeConvId) {
-        console.log('📤 Sending', pendingMessages.current.length, 'pending messages');
-        pendingMessages.current.forEach(msg => {
-          socket.emit('send-message', {
-            convId: activeConvId,
-            message: msg.text,
-            isCreator: msg.isCreator
-          });
-        });
-        pendingMessages.current = [];
-      }
     });
     
-    socket.on('disconnect', (reason) => {
-      console.log('⚠️ Disconnected from server. Reason:', reason);
+    socket.on('disconnect', () => {
+      console.log('⚠️ Disconnected from server');
       setSocketConnected(false);
-      reconnectAttempts.current++;
     });
     
     socket.on('connect_error', (error) => {
       console.error('❌ Connection error:', error.message);
       setSocketConnected(false);
-      reconnectAttempts.current++;
     });
     
     socket.on('reconnect', (attemptNumber) => {
       console.log('🔄 Reconnected after', attemptNumber, 'attempts');
       setSocketConnected(true);
-      reconnectAttempts.current = 0;
       
       if (activeConvId) {
         console.log('♻️ Rejoining conversation:', activeConvId);
@@ -397,18 +249,7 @@ function App() {
       if (existingChat) {
         console.log('♻️ Restoring conversation:', existingChat.convId);
         
-        // First, try to load from localStorage immediately
-        const cachedConv = loadConversationFromStorage(existingChat.convId);
-        if (cachedConv) {
-          console.log('📂 Loading cached messages first:', cachedConv.messages.length);
-          setActiveConvId(existingChat.convId);
-          setIsCreator(false);
-          setCurrentConv(cachedConv);
-          setView('chat');
-        }
-        
         try {
-          // Then fetch from server to get any new messages
           const response = await axios.get(`${API_URL}/api/conversations/${existingChat.convId}`);
           const { conversation } = response.data;
           
@@ -417,41 +258,16 @@ function App() {
           setActiveConvId(existingChat.convId);
           setIsCreator(false);
           
-          // Merge cached messages with server messages
-          const cachedMessages = cachedConv?.messages || [];
-          const serverMessages = conversation.messages || [];
-          
-          // Create a map to deduplicate messages
-          const messageMap = new Map();
-          
-          // Add cached messages first
-          cachedMessages.forEach(msg => {
-            const key = `${msg.text}_${msg.isCreator}_${Math.floor(msg.timestamp / 1000)}`;
-            messageMap.set(key, msg);
-          });
-          
-          // Add server messages (will overwrite cached if exists)
-          serverMessages.forEach(msg => {
-            const key = `${msg.text}_${msg.isCreator}_${Math.floor(msg.timestamp / 1000)}`;
-            messageMap.set(key, msg);
-          });
-          
-          // Convert back to array and sort by timestamp
-          const mergedMessages = Array.from(messageMap.values()).sort((a, b) => a.timestamp - b.timestamp);
-          
           const convData = {
             id: existingChat.convId,
             linkId: conversation.linkId,
-            messages: mergedMessages,
+            messages: conversation.messages || [],
             createdAt: conversation.createdAt,
             lastMessage: conversation.lastMessage
           };
           
           setCurrentConv(convData);
           setView('chat');
-          
-          // Save merged data
-          saveConversationToStorage(convData);
           
           updateChatHistoryActivity(existingChat.convId);
           
@@ -466,11 +282,9 @@ function App() {
           }, 100);
           
         } catch (error) {
-          console.error('❌ Failed to fetch from server, using cached data');
-          if (!cachedConv) {
-            removeChatHistory(existingChat.convId);
-            await createNewConversation(linkId);
-          }
+          console.error('❌ Failed to restore conversation:', error);
+          removeChatHistory(existingChat.convId);
+          await createNewConversation(linkId);
         }
       } else {
         console.log('🆕 No existing chat, creating new conversation');
@@ -520,52 +334,16 @@ function App() {
     if (!socket) return;
 
     const handleLoadMessages = ({ messages }) => {
-      console.log('📥 Socket: Loading messages from server:', messages?.length || 0);
+      console.log('📥 Socket: Loading messages:', messages?.length || 0, messages);
       
       if (activeConvId) {
         setCurrentConv(prev => {
-          // Get existing messages (might be from cache)
-          const existingMessages = prev?.messages || [];
-          
-          // If we have cached messages, merge with server messages
-          if (existingMessages.length > 0) {
-            console.log('🔄 Merging cached messages with server messages');
-            
-            // Create a map to deduplicate
-            const messageMap = new Map();
-            
-            // Add existing messages first
-            existingMessages.forEach(msg => {
-              const key = `${msg.text}_${msg.isCreator}_${Math.floor(msg.timestamp / 1000)}`;
-              messageMap.set(key, msg);
-            });
-            
-            // Add server messages (will overwrite if exists)
-            (messages || []).forEach(msg => {
-              const key = `${msg.text}_${msg.isCreator}_${Math.floor(msg.timestamp / 1000)}`;
-              messageMap.set(key, msg);
-            });
-            
-            // Convert back to array and sort
-            const mergedMessages = Array.from(messageMap.values()).sort((a, b) => a.timestamp - b.timestamp);
-            
-            const updated = {
-              ...prev,
-              id: activeConvId,
-              messages: mergedMessages
-            };
-            
-            console.log('💾 Merged messages:', mergedMessages.length);
-            return updated;
-          }
-          
-          // No cached messages, just use server messages
           const updated = {
             ...prev,
             id: activeConvId,
             messages: messages || []
           };
-          console.log('💾 Using server messages:', messages?.length || 0);
+          console.log('💾 Updated currentConv:', updated);
           return updated;
         });
       }
@@ -583,34 +361,15 @@ function App() {
       const isMessageFromOther = newMessage.isCreator !== isCreator;
       
       if (convId === activeConvId && currentConv) {
+        const previousMessageCount = currentConv.messages?.length || 0;
+        
         setCurrentConv(prev => {
-          // Remove any pending messages that match this one
-          const filteredMessages = (prev.messages || []).filter(msg => 
-            !(msg.pending && msg.text === newMessage.text && msg.isCreator === newMessage.isCreator)
-          );
-          
-          // Check if this exact message already exists (prevent duplicates)
-          const messageExists = filteredMessages.some(msg => 
-            msg.text === newMessage.text && 
-            msg.isCreator === newMessage.isCreator &&
-            Math.abs(msg.timestamp - newMessage.timestamp) < 1000
-          );
-          
-          if (messageExists) {
-            console.log('💬 Message already exists in UI, skipping duplicate');
-            return prev;
-          }
-          
           const updatedConv = {
             ...prev,
-            messages: [...filteredMessages, newMessage],
+            messages: [...(prev.messages || []), newMessage],
             lastMessage: newMessage.timestamp
           };
           console.log('💾 Updated conversation with new message:', updatedConv.messages.length);
-          
-          // Save to localStorage for persistence
-          saveConversationToStorage(updatedConv);
-          
           return updatedConv;
         });
         
@@ -781,7 +540,7 @@ function App() {
       socket.off('new-conversation', handleNewConversation);
       socket.off('conversation-updated', handleConversationUpdated);
     };
-  }, [socket, myLinkId, view, activeConvId, calculateUnreadCount]);
+  }, [socket, myLinkId, view, activeConvId]);
 
   // Auto scroll to bottom
   useEffect(() => {
@@ -835,13 +594,6 @@ function App() {
       });
       
       setConversations(convsWithUnread);
-      
-      // Track event
-      ReactGA.event({
-        category: 'Chat',
-        action: 'Create New Link',
-        label: 'Creator'
-      });
       
       console.log('✅ Chat link created');
     } catch (error) {
@@ -898,37 +650,18 @@ function App() {
       return;
     }
     
-    // Track event
-    ReactGA.event({
-      category: 'Chat',
-      action: 'Join with Link',
-      label: 'Anonymous User'
-    });
-    
     window.location.href = `/?link=${joinLinkId}`;
   };
 
   const openConversation = async (convId) => {
     setLoading(true);
     try {
-      // Load from cache first for instant display
-      const cachedConv = loadConversationFromStorage(convId);
-      if (cachedConv) {
-        setActiveConvId(convId);
-        setCurrentConv(cachedConv);
-        setView('chat');
-      }
-      
-      // Then fetch from server
       const response = await axios.get(`${API_URL}/api/conversations/${convId}`);
       const { conversation } = response.data;
       
       setActiveConvId(convId);
       setCurrentConv(conversation);
       setView('chat');
-      
-      // Save to cache
-      saveConversationToStorage(conversation);
       
       setConversations(prev => 
         prev.map(conv => {
@@ -953,18 +686,48 @@ function App() {
       console.log('✅ Opened conversation:', convId);
     } catch (error) {
       console.error('Error opening conversation:', error);
-      // If server fails, at least show cached data
-      const cachedConv = loadConversationFromStorage(convId);
-      if (cachedConv) {
-        setActiveConvId(convId);
-        setCurrentConv(cachedConv);
-        setView('chat');
-      } else {
-        alert('Failed to open conversation');
-      }
+      alert('Failed to open conversation');
     } finally {
       setLoading(false);
     }
+  };
+
+  const saveReadStatus = (convId, readUpToMessageCount) => {
+    try {
+      const readStatus = JSON.parse(localStorage.getItem('chat_read_status') || '{}');
+      readStatus[convId] = {
+        readUpToMessageCount,
+        timestamp: Date.now()
+      };
+      localStorage.setItem('chat_read_status', JSON.stringify(readStatus));
+    } catch (error) {
+      console.error('Error saving read status:', error);
+    }
+  };
+
+  const getReadStatus = (convId) => {
+    try {
+      const readStatus = JSON.parse(localStorage.getItem('chat_read_status') || '{}');
+      return readStatus[convId] || null;
+    } catch (error) {
+      console.error('Error getting read status:', error);
+      return null;
+    }
+  };
+
+  const calculateUnreadCount = (conv) => {
+    const readStatus = getReadStatus(conv.id);
+    if (!readStatus) {
+      return conv.messages ? conv.messages.filter(m => !m.isCreator).length : 0;
+    }
+    
+    const totalMessages = conv.messages?.length || 0;
+    if (totalMessages <= readStatus.readUpToMessageCount) {
+      return 0;
+    }
+    
+    const newMessages = conv.messages.slice(readStatus.readUpToMessageCount);
+    return newMessages.filter(m => !m.isCreator).length;
   };
 
   const loadMyChatHistory = () => {
@@ -1053,64 +816,20 @@ function App() {
   };
 
   const sendMessageHandler = () => {
-    if (!message.trim() || !activeConvId) {
+    if (!message.trim() || !activeConvId || !socket || !socket.connected) {
       return;
     }
     
     const messageText = message.trim();
-    const messageId = `temp_${Date.now()}_${Math.random()}`;
-    const tempMessage = {
-      id: messageId,
-      text: messageText,
-      timestamp: Date.now(),
-      isCreator: isCreator,
-      pending: !socket || !socket.connected,
-      isOptimistic: true // Mark as optimistic
-    };
-    
-    // IMMEDIATELY save to localStorage FIRST
-    saveMessageToStorage(activeConvId, tempMessage);
-    
-    // Then update UI
-    setCurrentConv(prev => {
-      const updatedConv = {
-        ...prev,
-        messages: [...(prev.messages || []), tempMessage],
-        lastMessage: tempMessage.timestamp
-      };
-      
-      // Save full conversation too
-      saveConversationToStorage(updatedConv);
-      
-      return updatedConv;
-    });
-    
     setMessage('');
     
-    // If connected, send to server
-    if (socket && socket.connected) {
-      socket.emit('send-message', {
-        convId: activeConvId,
-        message: messageText,
-        isCreator
-      });
-      
-      socket.emit('stop-typing', { convId: activeConvId });
-    } else {
-      // If disconnected, queue the message
-      console.log('📦 Queuing message for later delivery');
-      pendingMessages.current.push({
-        text: messageText,
-        isCreator: isCreator
-      });
-    }
-    
-    // Track message sent
-    ReactGA.event({
-      category: 'Chat',
-      action: 'Send Message',
-      label: isCreator ? 'Creator' : 'Anonymous User'
+    socket.emit('send-message', {
+      convId: activeConvId,
+      message: messageText,
+      isCreator
     });
+    
+    socket.emit('stop-typing', { convId: activeConvId });
     
     if (!isCreator) {
       updateChatHistoryActivity(activeConvId);
@@ -1140,13 +859,6 @@ function App() {
         .then(() => {
           setCopied(true);
           setTimeout(() => setCopied(false), 2000);
-          
-          // Track link copy
-          ReactGA.event({
-            category: 'Chat',
-            action: 'Copy Link',
-            label: 'Share Link'
-          });
         })
         .catch(() => {
           copyToClipboardFallback(fullLink);
@@ -1239,15 +951,15 @@ function App() {
               className="active-chat-button"
               title="Return to active chat"
             >
-              <MessageCircle size={20} />
-              <span>Active Chat</span>
+              {/* <MessageCircle size={20} /> */}
+              {/* <span>Active Chat</span> */}
             </button>
           )}
 
           <div className="logo-container">
             <MessageCircle size={48} color="#667eea" />
           </div>
-          <h1 className="title">Anonymous Chat</h1>
+          <h1 className="title">OChat</h1>
           <p className="subtitle">Chat anonymously with anyone, no sign-up required</p>
           
           <button onClick={createNewLink} className="primary-button" disabled={loading}>
@@ -1317,6 +1029,8 @@ function App() {
             <p className="feature">🔒 Completely anonymous</p>
             <p className="feature">💬 Real-time messaging</p>
             <p className="feature">🚀 No account needed</p>
+            <p className="feature"><a href="https://ochat.fun/about.html">📃 More about Ochat </a></p>
+
           </div>
         </div>
       </div>
@@ -1423,9 +1137,9 @@ function App() {
 
           {!socketConnected && (
             <div className="connection-warning">
-              <span>⚠️ Connection lost. Messages will send when reconnected.</span>
+              <span>⚠️ Disconnected from server</span>
               <button onClick={() => socket?.connect()} className="reconnect-btn">
-                Retry Now
+                Reconnect
               </button>
             </div>
           )}
@@ -1465,7 +1179,7 @@ function App() {
           <div className="input-container">
             <input
               type="text"
-              placeholder={socketConnected ? "Type a message..." : "Offline - messages will send when reconnected"}
+              placeholder={socketConnected ? "Type a message..." : "Disconnected..."}
               className="message-input"
               value={message}
               onChange={(e) => {
@@ -1473,12 +1187,12 @@ function App() {
                 handleTyping();
               }}
               onKeyPress={(e) => e.key === 'Enter' && sendMessageHandler()}
+              disabled={!socketConnected}
             />
             <button
               onClick={sendMessageHandler}
               className="send-button"
-              disabled={!message.trim()}
-              title={socketConnected ? "Send message" : "Send when reconnected"}
+              disabled={!message.trim() || !socketConnected}
             >
               <Send size={20} />
             </button>
