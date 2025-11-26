@@ -6,7 +6,6 @@ import axios from 'axios';
 import './app.css';
 
 const API_URL = 'https://anonym-backend.onrender.com';
-// const API_URL = 'http://localhost:5000';
 let socket;
 
 function App() {
