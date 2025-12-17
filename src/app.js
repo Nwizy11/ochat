@@ -1,12 +1,15 @@
-// src/App.js - Fixed version with proper real-time messaging
+// src/App.js - Fixed version with proper real-time messaging and swipe to reply
 import React, { useState, useEffect, useRef } from 'react';
-import { MessageCircle, Send, Copy, Check, Plus, User, List, Bell } from 'lucide-react';
+import { MessageCircle, Send, Copy, Check, Plus, User, List, X, Image as ImageIcon, Paperclip } from 'lucide-react';
 import io from 'socket.io-client';
 import axios from 'axios';
 import './app.css';
 
 const API_URL = 'https://anonym-backend.onrender.com';
 let socket;
+
+const MAX_IMAGE_SIZE = 5 * 1024 * 1024; // 5MB
+const ALLOWED_IMAGE_TYPES = ['image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/webp'];
 
 function App() {
   const [view, setView] = useState('loading');
@@ -25,9 +28,15 @@ function App() {
   const [myLinks, setMyLinks] = useState([]);
   const [myChatHistory, setMyChatHistory] = useState([]);
   const [showNotification, setShowNotification] = useState(false);
+  const [replyingTo, setReplyingTo] = useState(null);
+  const [selectedImage, setSelectedImage] = useState(null);
+  const [imagePreview, setImagePreview] = useState(null);
+  const [uploadingImage, setUploadingImage] = useState(false);
+  const [viewingImage, setViewingImage] = useState(null);
   const messagesEndRef = useRef(null);
   const typingTimeoutRef = useRef(null);
   const audioContextRef = useRef(null);
+  const fileInputRef = useRef(null);
 
   // Initialize audio context for notification sound
   useEffect(() => {
@@ -751,19 +760,35 @@ function App() {
     }
   };
 
-  const sendMessageHandler = () => {
-    if (!message.trim() || !activeConvId || !socket || !socket.connected) {
+  const sendMessageHandler = async () => {
+    if ((!message.trim() && !selectedImage) || !activeConvId || !socket || !socket.connected) {
       return;
     }
     
+    if (uploadingImage) return; // Prevent double sending
+    
     const messageText = message.trim();
+    const imageToSend = selectedImage;
+    const replyToSend = replyingTo;
+    
+    // Clear inputs immediately
+    setMessage('');
+    setReplyingTo(null);
+    setSelectedImage(null);
+    setImagePreview(null);
+    
+    // Create message ID for tracking
+    const messageId = Date.now() + Math.random();
     
     // Create temporary message for immediate display
     const tempMessage = {
-      id: Date.now() + Math.random(),
+      id: messageId,
       text: messageText,
       isCreator,
-      timestamp: Date.now()
+      timestamp: Date.now(),
+      replyTo: replyToSend,
+      image: imageToSend ? imageToSend : null,
+      uploading: imageToSend ? true : false
     };
     
     // Add message to UI immediately
@@ -773,13 +798,31 @@ function App() {
       lastMessage: Date.now()
     }));
     
-    setMessage('');
+    // Set uploading state if there's an image
+    if (imageToSend) {
+      setUploadingImage(true);
+    }
     
     // Send to server
     socket.emit('send-message', {
       convId: activeConvId,
       message: messageText,
-      isCreator
+      isCreator,
+      replyTo: replyToSend,
+      image: imageToSend
+    }, (response) => {
+      // Callback after server confirms receipt
+      setUploadingImage(false);
+      
+      if (response && response.success) {
+        // Update the message to remove uploading state
+        setCurrentConv(prev => ({
+          ...prev,
+          messages: prev.messages.map(msg => 
+            msg.id === messageId ? { ...msg, uploading: false } : msg
+          )
+        }));
+      }
     });
     
     socket.emit('stop-typing', { convId: activeConvId });
@@ -845,6 +888,7 @@ function App() {
       setView('creator');
       setActiveConvId(null);
       setCurrentConv(null);
+      setReplyingTo(null);
       window.history.pushState({}, '', `/?creator=${myLinkId}`);
     } else {
       setView('home');
@@ -854,6 +898,7 @@ function App() {
       setConversations([]);
       setCurrentConv(null);
       setIsCreator(false);
+      setReplyingTo(null);
       window.history.pushState({}, '', '/');
     }
   };
@@ -863,6 +908,7 @@ function App() {
       setView('creator');
       setActiveConvId(null);
       setCurrentConv(null);
+      setReplyingTo(null);
       window.history.pushState({}, '', `/?creator=${myLinkId}`);
     }
   };
@@ -876,6 +922,57 @@ function App() {
     if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`;
     if (diff < 86400000) return `${Math.floor(diff / 3600000)}h ago`;
     return date.toLocaleDateString();
+  };
+
+  const handleSwipeReply = (msg) => {
+    setReplyingTo({
+      id: msg.id,
+      text: msg.text,
+      isCreator: msg.isCreator,
+      hasImage: !!msg.image
+    });
+  };
+
+  const handleImageSelect = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    // Validate file type
+    if (!ALLOWED_IMAGE_TYPES.includes(file.type)) {
+      alert('Please select a valid image file (JPEG, PNG, GIF, or WebP)');
+      return;
+    }
+
+    // Validate file size
+    if (file.size > MAX_IMAGE_SIZE) {
+      alert('Image size must be less than 5MB');
+      return;
+    }
+
+    // Read and convert to base64
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      const base64String = reader.result;
+      setSelectedImage(base64String);
+      setImagePreview(base64String);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const removeSelectedImage = () => {
+    setSelectedImage(null);
+    setImagePreview(null);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+  };
+
+  const openImageViewer = (imageData) => {
+    setViewingImage(imageData);
+  };
+
+  const closeImageViewer = () => {
+    setViewingImage(null);
   };
 
   if (view === 'loading' || loading) {
@@ -1097,18 +1194,15 @@ function App() {
               </div>
             ) : (
               currentConv.messages.map((msg, idx) => (
-                <div
+                <SwipeableMessage
                   key={idx}
-                  className="message-wrapper"
-                  style={{
-                    justifyContent: msg.isCreator === isCreator ? 'flex-end' : 'flex-start'
-                  }}
-                >
-                  <div className={msg.isCreator === isCreator ? 'my-message' : 'their-message'}>
-                    <p className="message-text">{msg.text}</p>
-                    <div className="message-time">{formatTime(msg.timestamp)}</div>
-                  </div>
-                </div>
+                  msg={msg}
+                  isOwn={msg.isCreator === isCreator}
+                  onSwipeReply={() => handleSwipeReply(msg)}
+                  onImageClick={openImageViewer}
+                  formatTime={formatTime}
+                  isCreator={isCreator}
+                />
               ))
             )}
             <div ref={messagesEndRef} />
@@ -1121,7 +1215,57 @@ function App() {
             </div>
           )}
 
+          {replyingTo && (
+            <div className="reply-preview-container">
+              <div className="reply-preview-bar"></div>
+              <div className="reply-preview-info">
+                <div className="reply-preview-sender">
+                  Replying to {replyingTo.isCreator === isCreator ? 'yourself' : (replyingTo.isCreator ? 'Chat Creator' : 'Anonymous User')}
+                </div>
+                <div className="reply-preview-message">
+                  {replyingTo.hasImage && '📷 '}
+                  {replyingTo.text || 'Image'}
+                </div>
+              </div>
+              <button 
+                className="reply-preview-close"
+                onClick={() => setReplyingTo(null)}
+              >
+                <X size={18} />
+              </button>
+            </div>
+          )}
+
+          {imagePreview && (
+            <div className="image-preview-container">
+              <div className="image-preview-wrapper">
+                <img src={imagePreview} alt="Preview" className="image-preview" />
+                <button 
+                  className="image-preview-remove"
+                  onClick={removeSelectedImage}
+                >
+                  <X size={20} />
+                </button>
+              </div>
+            </div>
+          )}
+
           <div className="input-container">
+            <input
+              type="file"
+              ref={fileInputRef}
+              accept="image/*"
+              onChange={handleImageSelect}
+              style={{ display: 'none' }}
+            />
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              className="attach-button"
+              disabled={!socketConnected || uploadingImage}
+              title="Attach image"
+            >
+              <Paperclip size={20} />
+            </button>
             <input
               type="text"
               placeholder={socketConnected ? "Type a message..." : "Disconnected..."}
@@ -1137,9 +1281,9 @@ function App() {
             <button
               onClick={sendMessageHandler}
               className="send-button"
-              disabled={!message.trim() || !socketConnected}
+              disabled={(!message.trim() && !selectedImage) || !socketConnected || uploadingImage}
             >
-              <Send size={20} />
+              {uploadingImage ? <div className="spinner-small"></div> : <Send size={20} />}
             </button>
           </div>
         </div>
@@ -1147,7 +1291,191 @@ function App() {
     );
   }
 
-  return null;
+  return (
+    <>
+      {viewingImage && <ImageViewer imageData={viewingImage} onClose={closeImageViewer} />}
+      {null}
+    </>
+  );
+}
+
+// Image Viewer Modal Component
+function ImageViewer({ imageData, onClose }) {
+  useEffect(() => {
+    const handleEscape = (e) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', handleEscape);
+    return () => window.removeEventListener('keydown', handleEscape);
+  }, [onClose]);
+
+  if (!imageData) return null;
+
+  return (
+    <div className="image-viewer-overlay" onClick={onClose}>
+      <div className="image-viewer-container">
+        <button className="image-viewer-close" onClick={onClose}>
+          <X size={24} />
+        </button>
+        <img 
+          src={imageData} 
+          alt="Full size" 
+          className="image-viewer-image"
+          onClick={(e) => e.stopPropagation()}
+        />
+      </div>
+    </div>
+  );
+}
+
+// SwipeableMessage Component
+function SwipeableMessage({ msg, isOwn, onSwipeReply, onImageClick, formatTime, isCreator }) {
+  const [offset, setOffset] = useState(0);
+  const [isDragging, setIsDragging] = useState(false);
+  const startX = useRef(0);
+  const currentX = useRef(0);
+  const SWIPE_THRESHOLD = 80;
+
+  const handleStart = (clientX) => {
+    setIsDragging(true);
+    startX.current = clientX;
+    currentX.current = clientX;
+  };
+
+  const handleMove = (clientX) => {
+    if (!isDragging) return;
+    
+    currentX.current = clientX;
+    const diff = clientX - startX.current;
+    
+    // Allow swipe left for own messages, right for others
+    if ((isOwn && diff < 0) || (!isOwn && diff > 0)) {
+      setOffset(Math.min(Math.abs(diff), SWIPE_THRESHOLD));
+    }
+  };
+
+  const handleEnd = () => {
+    setIsDragging(false);
+    
+    if (offset >= SWIPE_THRESHOLD) {
+      onSwipeReply();
+    }
+    
+    setOffset(0);
+  };
+
+  const handleTouchStart = (e) => {
+    handleStart(e.touches[0].clientX);
+  };
+
+  const handleTouchMove = (e) => {
+    handleMove(e.touches[0].clientX);
+  };
+
+  const handleMouseDown = (e) => {
+    handleStart(e.clientX);
+  };
+
+  const handleMouseMove = (e) => {
+    handleMove(e.clientX);
+  };
+
+  const handleMouseUp = () => {
+    handleEnd();
+  };
+
+  const handleMouseLeave = () => {
+    if (isDragging) {
+      handleEnd();
+    }
+  };
+
+  const transform = isOwn ? `translateX(-${offset}px)` : `translateX(${offset}px)`;
+  const opacity = Math.min(offset / SWIPE_THRESHOLD, 1);
+
+  return (
+    <div
+      className="message-wrapper"
+      style={{
+        justifyContent: isOwn ? 'flex-end' : 'flex-start'
+      }}
+    >
+      <div className="swipeable-message-container">
+        {/* Reply icon - shows on swipe */}
+        {!isOwn && offset > 20 && (
+          <div 
+            className="swipe-reply-icon swipe-reply-icon-left"
+            style={{ opacity }}
+          >
+            ↩
+          </div>
+        )}
+        
+        <div
+          className="swipeable-message-content"
+          style={{
+            transform,
+            transition: isDragging ? 'none' : 'transform 0.3s ease'
+          }}
+          onTouchStart={handleTouchStart}
+          onTouchMove={handleTouchMove}
+          onTouchEnd={handleEnd}
+          onMouseDown={handleMouseDown}
+          onMouseMove={handleMouseMove}
+          onMouseUp={handleMouseUp}
+          onMouseLeave={handleMouseLeave}
+        >
+          <div className={isOwn ? 'my-message' : 'their-message'}>
+            {msg.replyTo && (
+              <div className="message-reply-context">
+                <div className="message-reply-line"></div>
+                <div className="message-reply-details">
+                  <div className="message-reply-sender">
+                    {msg.replyTo.isCreator === isCreator ? 'You' : (msg.replyTo.isCreator ? 'Chat Creator' : 'Anonymous')}
+                  </div>
+                  <div className="message-reply-text">
+                    {msg.replyTo.hasImage && '📷 '}
+                    {msg.replyTo.text || 'Image'}
+                  </div>
+                </div>
+              </div>
+            )}
+            
+            {msg.image && (
+              <div className="message-image-container">
+                {msg.uploading ? (
+                  <div className="message-image-uploading">
+                    <div className="spinner"></div>
+                    <span>Uploading...</span>
+                  </div>
+                ) : (
+                  <img 
+                    src={msg.image} 
+                    alt="Shared" 
+                    className="message-image"
+                    onClick={() => onImageClick(msg.image)}
+                  />
+                )}
+              </div>
+            )}
+            
+            {msg.text && <p className="message-text">{msg.text}</p>}
+            <div className="message-time">{formatTime(msg.timestamp)}</div>
+          </div>
+        </div>
+
+        {/* Reply icon - shows on swipe */}
+        {isOwn && offset > 20 && (
+          <div 
+            className="swipe-reply-icon swipe-reply-icon-right"
+            style={{ opacity }}
+          >
+            ↩
+          </div>
+        )}
+      </div>
+    </div>
+  );
 }
 
 export default App;
