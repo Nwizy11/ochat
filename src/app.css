@@ -30,11 +30,21 @@ body {
   padding: 20px;
 }
 
+.container.fullscreen-parent {
+  padding: 0;
+  align-items: stretch;
+}
+
 @media (max-width: 768px) {
   .container {
     padding: 0;
     align-items: flex-start;
     padding-top: 40px;
+  }
+  
+  .container.fullscreen-parent {
+    padding: 0;
+    align-items: stretch;
   }
 }
 
