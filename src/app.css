@@ -1285,7 +1285,7 @@ body {
   cursor: not-allowed;
 }
 
-@media (max-width: 768px) {
+/* @media (max-width: 768px) {
   .link-buttons {
     flex-direction: row;
   }
@@ -1294,4 +1294,4 @@ body {
   .qr-button {
     width: 100%;
   }
-}
+} */
