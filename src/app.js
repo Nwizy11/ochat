@@ -1,11 +1,12 @@
 // src/App.js - Fixed version with proper real-time messaging and swipe to reply
 import React, { useState, useEffect, useRef } from 'react';
-import { MessageCircle, Send, Copy, Check, Plus, User, List, X, Image as ImageIcon, Paperclip } from 'lucide-react';
+import { MessageCircle, Send, Copy, Check, Plus, User, List, X, Image as ImageIcon, Paperclip, Download } from 'lucide-react';
+import QRCodeStyling from 'qr-code-styling';
 import io from 'socket.io-client';
 import axios from 'axios';
 import './app.css';
 
-const API_URL = 'https://anonym-backend.onrender.com';
+const API_URL = 'http://localhost:5000';
 let socket;
 
 const MAX_IMAGE_SIZE = 5 * 1024 * 1024; // 5MB
@@ -37,6 +38,7 @@ function App() {
   const typingTimeoutRef = useRef(null);
   const audioContextRef = useRef(null);
   const fileInputRef = useRef(null);
+  const [generatingQR, setGeneratingQR] = useState(false);
 
   // Initialize audio context for notification sound
   useEffect(() => {
@@ -864,6 +866,128 @@ function App() {
     }
   };
 
+  //qrcode
+  const downloadQRCode = async () => {
+  if (!myLinkId || generatingQR) return;
+  
+  setGeneratingQR(true);
+  
+  try {
+    const fullLink = `${window.location.origin}/?link=${myLinkId}`;
+    
+    // Create canvas for QR code with branding
+    const canvas = document.createElement('canvas');
+    canvas.width = 800;
+    canvas.height = 920;
+    const ctx = canvas.getContext('2d');
+    
+    // White background
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    
+    // Create QR Code with custom styling
+    const qrCode = new QRCodeStyling({
+      width: 700,
+      height: 700,
+      data: fullLink,
+      margin: 20,
+      qrOptions: {
+        typeNumber: 0,
+        mode: 'Byte',
+        errorCorrectionLevel: 'H'
+      },
+      imageOptions: {
+        hideBackgroundDots: true,
+        imageSize: 0.3,
+        margin: 8
+      },
+      dotsOptions: {
+        type: 'rounded',
+        color: '#4169E1',
+        gradient: {
+          type: 'linear',
+          rotation: 0,
+          colorStops: [
+            { offset: 0, color: '#667eea' },
+            { offset: 1, color: '#764ba2' }
+          ]
+        }
+      },
+      backgroundOptions: {
+        color: '#ffffff'
+      },
+      cornersSquareOptions: {
+        type: 'extra-rounded',
+        color: '#667eea'
+      },
+      cornersDotOptions: {
+        type: 'dot',
+        color: '#764ba2'
+      }
+    });
+    
+    // Get QR code as blob
+    const qrBlob = await qrCode.getRawData('png');
+    const qrImage = await createImageBitmap(qrBlob);
+    
+    // Draw QR code centered
+    ctx.drawImage(qrImage, 50, 80, 700, 700);
+    
+    // Add rounded rectangle background for branding
+    const brandingY = 800;
+    const brandingHeight = 100;
+    ctx.fillStyle = '#f8f9ff';
+    roundRect(ctx, 50, brandingY, 700, brandingHeight, 15);
+    ctx.fill();
+    
+    // Add "Ochat.fun" text
+    ctx.fillStyle = '#667eea';
+    ctx.font = 'bold 48px Inter, -apple-system, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('Ochat.fun', 400, brandingY + 35);
+    
+    // Add copyright text
+    ctx.fillStyle = '#999';
+    ctx.font = '24px Inter, -apple-system, sans-serif';
+    ctx.fillText('Scan to chat privately', 400, brandingY + 72);
+    
+    // Convert to blob and download
+    canvas.toBlob((blob) => {
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `ochat-qr-${myLinkId}.png`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      
+      setGeneratingQR(false);
+    }, 'image/png');
+    
+  } catch (error) {
+    console.error('Error generating QR code:', error);
+    alert('Failed to generate QR code');
+    setGeneratingQR(false);
+  }
+};
+
+// Helper function to draw rounded rectangle
+const roundRect = (ctx, x, y, width, height, radius) => {
+  ctx.beginPath();
+  ctx.moveTo(x + radius, y);
+  ctx.lineTo(x + width - radius, y);
+  ctx.quadraticCurveTo(x + width, y, x + width, y + radius);
+  ctx.lineTo(x + width, y + height - radius);
+  ctx.quadraticCurveTo(x + width, y + height, x + width - radius, y + height);
+  ctx.lineTo(x + radius, y + height);
+  ctx.quadraticCurveTo(x, y + height, x, y + height - radius);
+  ctx.lineTo(x, y + radius);
+  ctx.quadraticCurveTo(x, y, x + radius, y);
+  ctx.closePath();
+};
+
   const copyToClipboardFallback = (text) => {
     const textArea = document.createElement('textarea');
     textArea.value = text;
@@ -1096,17 +1220,32 @@ function App() {
               Home
             </button>
           </div>
-
+          
           <div className="link-section">
-            <div className="link-info">
-              <span className="link-label">SHARE THIS LINK</span>
-              <span className="link-id">{myLinkId}</span>
-            </div>
-            <button onClick={copyLink} className="copy-button">
-              {copied ? <Check size={16} /> : <Copy size={16} />}
-              <span>{copied ? 'Copied!' : 'Copy'}</span>
-            </button>
-          </div>
+  <div className="link-info">
+    <span className="link-label">SHARE THIS LINK</span>
+    <span className="link-id">{myLinkId}</span>
+  </div>
+  <div className="link-buttons">
+    <button onClick={copyLink} className="copy-button">
+      {copied ? <Check size={16} /> : <Copy size={16} />}
+      <span>{copied ? 'Copied!' : 'Copy'}</span>
+    </button>
+    <button 
+      onClick={downloadQRCode} 
+      className="qr-button"
+      disabled={generatingQR}
+      title="Download QR Code"
+    >
+      {generatingQR ? (
+        <div className="spinner-small"></div>
+      ) : (
+        <Download size={16} />
+      )}
+      <span>{generatingQR ? 'Generating...' : 'QR'}</span>
+    </button>
+  </div>
+</div>
 
           <div className="conversation-list">
             {conversations.length === 0 ? (
