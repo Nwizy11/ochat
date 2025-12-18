@@ -1,4 +1,4 @@
-/* src/App.css - Complete with fullscreen chat and fixed header */
+/* src/App.css - WhatsApp-style fullscreen chat */
 
 /* Import Inter font from Google Fonts */
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
@@ -270,7 +270,7 @@ body {
   overflow: hidden;
 }
 
-/* Full screen mode for chat view */
+/* WhatsApp-style fullscreen for chat view */
 .app-container.fullscreen {
   position: fixed;
   top: 0;
@@ -699,18 +699,15 @@ body {
   }
 }
 
+/* WhatsApp-style fixed chat header */
 .chat-header {
-  padding: 16px 24px;
+  padding: 16px 20px;
   border-bottom: 1px solid #f0f0f0;
   display: flex;
   align-items: center;
   gap: 12px;
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
   background: white;
-  z-index: 100;
+  flex-shrink: 0;
 }
 
 .back-button-small {
@@ -725,6 +722,7 @@ body {
   align-items: center;
   justify-content: center;
   transition: background 0.2s;
+  flex-shrink: 0;
 }
 
 .back-button-small:hover {
@@ -735,6 +733,7 @@ body {
   display: flex;
   align-items: center;
   gap: 12px;
+  flex: 1;
 }
 
 .avatar-small {
@@ -745,6 +744,7 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
+  flex-shrink: 0;
 }
 
 .chat-title {
@@ -760,13 +760,16 @@ body {
   color: #22c55e;
 }
 
+/* Messages container - fills space between header and input */
 .messages-container {
   flex: 1;
   overflow-y: auto;
-  padding: 84px 20px 20px 20px;
+  overflow-x: hidden;
+  padding: 20px;
   display: flex;
   flex-direction: column;
   gap: 12px;
+  background: white;
 }
 
 .messages-container::-webkit-scrollbar {
@@ -911,6 +914,7 @@ body {
   align-items: center;
   gap: 12px;
   animation: slideUp 0.2s ease-out;
+  flex-shrink: 0;
 }
 
 @keyframes slideUp {
@@ -980,29 +984,18 @@ body {
   font-style: italic;
 }
 
-/* Input Container - FIXED for button shrinking */
+/* WhatsApp-style input container at bottom */
 .input-container {
-  padding: 16px 24px;
+  padding: 12px 16px;
   border-top: 1px solid #f0f0f0;
   display: flex;
   gap: 12px;
   align-items: center;
   background: white;
-  position: fixed;
-  bottom: 0;
-  left: 0;
-  right: 0;
-  z-index: 100;
+  flex-shrink: 0;
 }
 
-@media (max-width: 768px) {
-  .input-container {
-    padding: 12px 16px;
-    gap: 8px;
-  }
-}
-
-/* Attach Button - FIXED with min-width/height */
+/* Attach Button */
 .attach-button {
   width: 40px;
   height: 40px;
@@ -1030,15 +1023,6 @@ body {
   cursor: not-allowed;
 }
 
-@media (max-width: 768px) {
-  .attach-button {
-    width: 36px;
-    height: 36px;
-    min-width: 36px;
-    min-height: 36px;
-  }
-}
-
 .message-input {
   flex: 1;
   padding: 12px 16px;
@@ -1053,7 +1037,7 @@ body {
   border-color: #667eea;
 }
 
-/* Send Button - FIXED with min-width/height to prevent shrinking */
+/* Send Button */
 .send-button {
   width: 48px;
   height: 48px;
@@ -1069,7 +1053,6 @@ body {
   justify-content: center;
   transition: transform 0.2s;
   flex-shrink: 0;
-  z-index: 10;
   -webkit-tap-highlight-color: transparent;
   touch-action: manipulation;
 }
@@ -1087,15 +1070,6 @@ body {
   cursor: not-allowed;
 }
 
-@media (max-width: 768px) {
-  .send-button {
-    width: 44px;
-    height: 44px;
-    min-width: 44px;
-    min-height: 44px;
-  }
-}
-
 .spinner-small {
   width: 20px;
   height: 20px;
@@ -1111,6 +1085,7 @@ body {
   background: #f8f9ff;
   border-top: 1px solid #e5e7ff;
   animation: slideUp 0.2s ease-out;
+  flex-shrink: 0;
 }
 
 .image-preview-wrapper {
@@ -1289,33 +1264,4 @@ body {
 
 .spinning {
   animation: spin 1s linear infinite;
-}
-
-/* Accessibility improvements */
-.back-button:focus,
-.send-button:focus,
-.attach-button:focus,
-.copy-button:focus,
-.qr-button:focus {
-  outline: 2px solid #667eea;
-  outline-offset: 2px;
-}
-
-/* Print styles */
-@media print {
-  .input-container,
-  .attach-button,
-  .send-button,
-  .back-button,
-  .back-button-small,
-  .list-button,
-  .copy-button,
-  .qr-button {
-    display: none !important;
-  }
-  
-  .app-container {
-    box-shadow: none;
-    border: 1px solid #ddd;
-  }
 }
