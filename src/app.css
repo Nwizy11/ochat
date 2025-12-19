@@ -31,14 +31,14 @@ body {
   padding-top: 20px;
 }
 
-.container.fullscreen-parent {
+/* .container.fullscreen-parent {
   padding: 0;
   align-items: stretch;
-}
+} */
 
 @media (max-width: 768px) {
   .container {
-    padding-top: 20px;
+    padding-top: 40px;
     padding: 0;
     align-items: flex-start;
   }
