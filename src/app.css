@@ -1,4 +1,4 @@
-/* src/App.css - Complete with fixed button shrinking issue and fullscreen chat */
+/* src/App.css - WhatsApp-style fullscreen chat */
 
 /* Import Inter font from Google Fonts */
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
@@ -39,7 +39,6 @@ body {
   .container {
     padding: 0;
     align-items: flex-start;
-    padding-top: 40px;
   }
   
   .container.fullscreen-parent {
@@ -271,19 +270,22 @@ body {
   overflow: hidden;
 }
 
-/* Full screen mode for chat view */
+/* WhatsApp-style fullscreen for chat view */
 .app-container.fullscreen {
-  max-width: 100vw;
-  width: 100vw;
-  height: 100vh;
-  max-height: 100vh;
-  border-radius: 0;
-  box-shadow: none;
   position: fixed;
   top: 0;
   left: 0;
   right: 0;
   bottom: 0;
+  width: 100vw;
+  height: 100vh;
+  max-width: 100vw;
+  max-height: 100vh;
+  border-radius: 0;
+  box-shadow: none;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
 }
 
 .header {
@@ -699,16 +701,16 @@ body {
   }
 }
 
+/* WhatsApp-style fixed chat header */
 .chat-header {
-  padding: 16px 24px;
+  padding: 16px 20px;
   border-bottom: 1px solid #f0f0f0;
   display: flex;
   align-items: center;
   gap: 12px;
-  position: sticky;
-  top: 0;
   background: white;
-  z-index: 100;
+  flex-shrink: 0;
+  min-height: 70px;
 }
 
 .back-button-small {
@@ -723,6 +725,7 @@ body {
   align-items: center;
   justify-content: center;
   transition: background 0.2s;
+  flex-shrink: 0;
 }
 
 .back-button-small:hover {
@@ -733,6 +736,7 @@ body {
   display: flex;
   align-items: center;
   gap: 12px;
+  flex: 1;
 }
 
 .avatar-small {
@@ -743,6 +747,7 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
+  flex-shrink: 0;
 }
 
 .chat-title {
@@ -758,13 +763,17 @@ body {
   color: #22c55e;
 }
 
+/* Messages container - fills space between header and input */
 .messages-container {
   flex: 1;
   overflow-y: auto;
+  overflow-x: hidden;
   padding: 20px;
   display: flex;
   flex-direction: column;
   gap: 12px;
+  background: white;
+  min-height: 0;
 }
 
 .messages-container::-webkit-scrollbar {
@@ -909,6 +918,7 @@ body {
   align-items: center;
   gap: 12px;
   animation: slideUp 0.2s ease-out;
+  flex-shrink: 0;
 }
 
 @keyframes slideUp {
@@ -978,27 +988,19 @@ body {
   font-style: italic;
 }
 
-/* Input Container - FIXED for button shrinking */
+/* WhatsApp-style input container at bottom */
 .input-container {
-  padding: 16px 24px;
+  padding: 12px 16px;
   border-top: 1px solid #f0f0f0;
   display: flex;
   gap: 12px;
   align-items: center;
   background: white;
-  position: sticky;
-  bottom: 0;
-  z-index: 100;
+  flex-shrink: 0;
+  min-height: 70px;
 }
 
-@media (max-width: 768px) {
-  .input-container {
-    padding: 12px 16px;
-    gap: 8px;
-  }
-}
-
-/* Attach Button - FIXED with min-width/height */
+/* Attach Button */
 .attach-button {
   width: 40px;
   height: 40px;
@@ -1026,15 +1028,6 @@ body {
   cursor: not-allowed;
 }
 
-@media (max-width: 768px) {
-  .attach-button {
-    width: 36px;
-    height: 36px;
-    min-width: 36px;
-    min-height: 36px;
-  }
-}
-
 .message-input {
   flex: 1;
   padding: 12px 16px;
@@ -1049,7 +1042,7 @@ body {
   border-color: #667eea;
 }
 
-/* Send Button - FIXED with min-width/height to prevent shrinking */
+/* Send Button */
 .send-button {
   width: 48px;
   height: 48px;
@@ -1065,7 +1058,6 @@ body {
   justify-content: center;
   transition: transform 0.2s;
   flex-shrink: 0;
-  z-index: 10;
   -webkit-tap-highlight-color: transparent;
   touch-action: manipulation;
 }
@@ -1083,15 +1075,6 @@ body {
   cursor: not-allowed;
 }
 
-@media (max-width: 768px) {
-  .send-button {
-    width: 44px;
-    height: 44px;
-    min-width: 44px;
-    min-height: 44px;
-  }
-}
-
 .spinner-small {
   width: 20px;
   height: 20px;
@@ -1107,6 +1090,7 @@ body {
   background: #f8f9ff;
   border-top: 1px solid #e5e7ff;
   animation: slideUp 0.2s ease-out;
+  flex-shrink: 0;
 }
 
 .image-preview-wrapper {
@@ -1285,109 +1269,4 @@ body {
 
 .spinning {
   animation: spin 1s linear infinite;
-}
-
-/* Mobile responsive adjustments for fullscreen chat */
-@media (max-width: 768px) {
-  .app-container.fullscreen {
-    position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    width: 100vw;
-    height: 100vh;
-    max-height: 100vh;
-  }
-  
-  .app-container.fullscreen .chat-header {
-    padding: 12px 16px;
-    position: sticky;
-    top: 0;
-  }
-  
-  .app-container.fullscreen .messages-container {
-    padding: 16px;
-    flex: 1;
-    overflow-y: auto;
-    -webkit-overflow-scrolling: touch;
-  }
-  
-  .app-container.fullscreen .input-container {
-    padding: 12px 16px;
-    position: sticky;
-    bottom: 0;
-  }
-  
-  .app-container.fullscreen .link-section {
-    padding: 12px 16px;
-  }
-  
-  .app-container.fullscreen .header {
-    padding: 16px;
-  }
-}
-
-/* Ensure proper layout on very small screens */
-@media (max-width: 380px) {
-  .my-link-id {
-    font-size: 11px;
-  }
-  
-  .my-link-open-btn {
-    padding: 4px 12px;
-    font-size: 12px;
-  }
-  
-  .link-buttons {
-    flex-direction: column;
-  }
-  
-  .copy-button,
-  .qr-button {
-    width: 100%;
-  }
-}
-
-/* Smooth transitions for view changes */
-.container {
-  transition: padding 0.3s ease;
-}
-
-.app-container {
-  transition: all 0.3s ease;
-}
-
-/* Accessibility improvements */
-.back-button:focus,
-.send-button:focus,
-.attach-button:focus,
-.copy-button:focus,
-.qr-button:focus {
-  outline: 2px solid #667eea;
-  outline-offset: 2px;
-}
-
-/* Print styles */
-@media print {
-  .input-container,
-  .attach-button,
-  .send-button,
-  .back-button,
-  .back-button-small,
-  .list-button,
-  .copy-button,
-  .qr-button {
-    display: none !important;
-  }
-  
-  .app-container {
-    box-shadow: none;
-    border: 1px solid #ddd;
-  }
-}
-
-/* Dark mode support (optional - can be expanded later) */
-@media (prefers-color-scheme: dark) {
-  /* Reserved for future dark mode implementation */
 }
