@@ -1114,7 +1114,7 @@ const roundRect = (ctx, x, y, width, height, radius) => {
 
   if (view === 'home') {
     return (
-      <div className="container">
+      <div className="container homecard">
         <div className="home-card">
           {showNotification && myChatHistory.length > 0 && (
             <button 
