@@ -1101,7 +1101,7 @@ const roundRect = (ctx, x, y, width, height, radius) => {
 
   if (view === 'loading' || loading) {
     return (
-      <div className="container">
+      <div className="container homecard">
         <div className="home-card">
           <div className="logo-container">
             <MessageCircle size={48} color="#667eea" className="spinning" />
