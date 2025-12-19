@@ -38,6 +38,7 @@ body {
 
 @media (max-width: 768px) {
   .container {
+    padding-top: 20px;
     padding: 0;
     align-items: flex-start;
   }
