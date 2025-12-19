@@ -588,6 +588,11 @@ body {
   gap: 12px;
   font-size: 14px;
   color: #856404;
+  position: fixed;
+  top: 70px;
+  left: 0;
+  right: 0;
+  z-index: 99;
 }
 
 .reconnect-btn {
@@ -709,7 +714,11 @@ body {
   align-items: center;
   gap: 12px;
   background: white;
-  flex-shrink: 0;
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 100;
   min-height: 70px;
 }
 
@@ -768,7 +777,7 @@ body {
   flex: 1;
   overflow-y: auto;
   overflow-x: hidden;
-  padding: 20px;
+  padding: 90px 20px 90px 20px;
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -918,7 +927,11 @@ body {
   align-items: center;
   gap: 12px;
   animation: slideUp 0.2s ease-out;
-  flex-shrink: 0;
+  position: fixed;
+  bottom: 70px;
+  left: 0;
+  right: 0;
+  z-index: 99;
 }
 
 @keyframes slideUp {
@@ -986,6 +999,12 @@ body {
   font-size: 13px;
   color: #666;
   font-style: italic;
+  position: fixed;
+  bottom: 70px;
+  left: 0;
+  right: 0;
+  background: white;
+  z-index: 99;
 }
 
 /* WhatsApp-style input container at bottom */
@@ -996,7 +1015,11 @@ body {
   gap: 12px;
   align-items: center;
   background: white;
-  flex-shrink: 0;
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 100;
   min-height: 70px;
 }
 
@@ -1090,7 +1113,11 @@ body {
   background: #f8f9ff;
   border-top: 1px solid #e5e7ff;
   animation: slideUp 0.2s ease-out;
-  flex-shrink: 0;
+  position: fixed;
+  bottom: 70px;
+  left: 0;
+  right: 0;
+  z-index: 99;
 }
 
 .image-preview-wrapper {
