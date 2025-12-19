@@ -716,6 +716,7 @@ body {
 
 /* WhatsApp-style fixed chat header - FIXED FOR KEYBOARD */
 .chat-header {
+  will-change: transform;
   padding: 16px 20px;
   border-bottom: 1px solid #f0f0f0;
   display: flex;
@@ -738,6 +739,14 @@ body {
   .chat-header {
     position: fixed;
     top: env(safe-area-inset-top, 0);
+  }
+}
+
+/* Additional fix for Android */
+@media (max-width: 768px) {
+  .chat-header {
+    position: fixed !important; /* NEW */
+    top: 0 !important; /* NEW */
   }
 }
 
@@ -1028,10 +1037,10 @@ body {
 
 /* WhatsApp-style input container at bottom - FIXED FOR KEYBOARD */
 .input-container {
-  padding: 12px 16px;
+  padding: 10px 12px; /* CHANGED from 12px 16px */
+  gap: 8px; /* CHANGED from 12px */
   border-top: 1px solid #f0f0f0;
   display: flex;
-  gap: 12px;
   align-items: center;
   background: white;
   position: fixed;
@@ -1055,8 +1064,8 @@ body {
 
 /* Attach Button */
 .attach-button {
-  width: 40px;
-  height: 40px;
+  width: 38px;
+  height: 38px;
   min-width: 40px;
   min-height: 40px;
   border-radius: 50%;
@@ -1069,6 +1078,7 @@ body {
   justify-content: center;
   transition: all 0.2s;
   flex-shrink: 0;
+  margin-left: 2px; /* NEW */
 }
 
 .attach-button:hover:not(:disabled) {
@@ -1113,6 +1123,7 @@ body {
   flex-shrink: 0;
   -webkit-tap-highlight-color: transparent;
   touch-action: manipulation;
+  margin-right: 4px;
 }
 
 .send-button:hover:not(:disabled) {
@@ -1131,10 +1142,11 @@ body {
 
 @media (max-width: 768px) {
   .send-button {
-    width: 42px;
-    height: 42px;
-    min-width: 42px;
-    min-height: 42px;
+    width: 40px;
+    height: 40px;
+    min-width: 40px;
+    min-height: 40px;
+    margin-right: 2px;
   }
 }
 
