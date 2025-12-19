@@ -43,10 +43,10 @@ body {
     align-items: flex-start;
   }
   
-  .container.fullscreen-parent {
+  /* .container.fullscreen-parent {
     padding: 0;
     align-items: stretch;
-  }
+  } */
 }
 
 .home-card {

@@ -1292,8 +1292,8 @@ const roundRect = (ctx, x, y, width, height, radius) => {
 
   if (view === 'chat') {
     return (
-      <div className="container fullscreen-parent">
-        <div className="app-container fullscreen">
+      <div className="container">
+        <div className="app-container">
           <div className="chat-header">
             <button onClick={goBack} className="back-button-small">
               ←
