@@ -12,6 +12,56 @@ let socket;
 const MAX_IMAGE_SIZE = 5 * 1024 * 1024; // 5MB
 const ALLOWED_IMAGE_TYPES = ['image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/webp'];
 
+// ─── Flutter Notification Bridge ─────────────────────────────────────────────
+// These functions tell the Flutter WebView which FCM topics to subscribe to.
+// The bridge only exists inside the Flutter app — the if-check prevents errors
+// when the site is opened in a regular browser.
+
+const flutterSubscribeConv = (convId) => {
+  if (window.FlutterNotifications) {
+    window.FlutterNotifications.postMessage(JSON.stringify({
+      action: 'subscribe',
+      type: 'conv',
+      id: convId
+    }));
+    console.log('📱 Flutter: subscribed to conv', convId);
+  }
+};
+
+const flutterUnsubscribeConv = (convId) => {
+  if (window.FlutterNotifications) {
+    window.FlutterNotifications.postMessage(JSON.stringify({
+      action: 'unsubscribe',
+      type: 'conv',
+      id: convId
+    }));
+    console.log('📱 Flutter: unsubscribed from conv', convId);
+  }
+};
+
+const flutterSubscribeLink = (linkId) => {
+  if (window.FlutterNotifications) {
+    window.FlutterNotifications.postMessage(JSON.stringify({
+      action: 'subscribe',
+      type: 'link',
+      id: linkId
+    }));
+    console.log('📱 Flutter: subscribed to link', linkId);
+  }
+};
+
+const flutterUnsubscribeLink = (linkId) => {
+  if (window.FlutterNotifications) {
+    window.FlutterNotifications.postMessage(JSON.stringify({
+      action: 'unsubscribe',
+      type: 'link',
+      id: linkId
+    }));
+    console.log('📱 Flutter: unsubscribed from link', linkId);
+  }
+};
+// ─────────────────────────────────────────────────────────────────────────────
+
 function App() {
   const [view, setView] = useState('loading');
   const [myLinkId, setMyLinkId] = useState(null);
@@ -214,6 +264,9 @@ function App() {
         setView('creator');
         
         socket.emit('join-link', { linkId, creatorId: link.creatorId });
+
+        // ✅ BRIDGE CALL 1: Creator restoring their session — subscribe to their link topic
+        flutterSubscribeLink(linkId);
         
         const convResponse = await axios.get(`${API_URL}/api/links/${linkId}/conversations`);
         setConversations(convResponse.data.conversations || []);
@@ -261,6 +314,9 @@ function App() {
               });
             }
           }, 100);
+
+          // ✅ BRIDGE CALL 2: Anonymous user rejoining an existing conversation
+          flutterSubscribeConv(existingChat.convId);
           
         } catch (error) {
           console.error('❌ Failed to restore conversation:', error);
@@ -299,6 +355,10 @@ function App() {
         convId: conversation.id, 
         isCreator: false 
       });
+
+      // ✅ BRIDGE CALL 3: Anonymous user joining a brand new conversation
+      flutterSubscribeConv(conversation.id);
+
     } else {
       alert('Invalid or expired link');
       window.history.replaceState({}, '', '/');
@@ -536,6 +596,9 @@ function App() {
       window.history.pushState({}, '', `/?creator=${linkId}`);
       
       socket.emit('join-link', { linkId, creatorId });
+
+      // ✅ BRIDGE CALL 4: Creator just created a new link — subscribe immediately
+      flutterSubscribeLink(linkId);
       
       const convResponse = await axios.get(`${API_URL}/api/links/${linkId}/conversations`);
       const convs = convResponse.data.conversations || [];
@@ -572,6 +635,9 @@ function App() {
         window.history.pushState({}, '', `/?creator=${linkId}`);
         
         socket.emit('join-link', { linkId, creatorId });
+
+        // ✅ BRIDGE CALL 5: Creator reopening an existing link from their saved list
+        flutterSubscribeLink(linkId);
         
         const convResponse = await axios.get(`${API_URL}/api/links/${linkId}/conversations`);
         const convs = convResponse.data.conversations || [];
@@ -633,6 +699,12 @@ function App() {
         convId, 
         isCreator: true 
       });
+
+      // ✅ BRIDGE CALL 6: Creator opening a specific conversation to read/reply
+      // No need to subscribe to conv topic here — creator already subscribed to
+      // the link topic (link_xxxx) which covers all conversations under that link.
+      // This is just a note — no extra call needed here.
+
     } catch (error) {
       console.error('Error opening conversation:', error);
       alert('Failed to open conversation');
@@ -767,22 +839,19 @@ function App() {
       return;
     }
     
-    if (uploadingImage) return; // Prevent double sending
+    if (uploadingImage) return;
     
     const messageText = message.trim();
     const imageToSend = selectedImage;
     const replyToSend = replyingTo;
     
-    // Clear inputs immediately
     setMessage('');
     setReplyingTo(null);
     setSelectedImage(null);
     setImagePreview(null);
     
-    // Create message ID for tracking
     const messageId = Date.now() + Math.random();
     
-    // Create temporary message for immediate display
     const tempMessage = {
       id: messageId,
       text: messageText,
@@ -793,19 +862,16 @@ function App() {
       uploading: imageToSend ? true : false
     };
     
-    // Add message to UI immediately
     setCurrentConv(prev => ({
       ...prev,
       messages: [...(prev.messages || []), tempMessage],
       lastMessage: Date.now()
     }));
     
-    // Set uploading state if there's an image
     if (imageToSend) {
       setUploadingImage(true);
     }
     
-    // Send to server
     socket.emit('send-message', {
       convId: activeConvId,
       message: messageText,
@@ -813,11 +879,9 @@ function App() {
       replyTo: replyToSend,
       image: imageToSend
     }, (response) => {
-      // Callback after server confirms receipt
       setUploadingImage(false);
       
       if (response && response.success) {
-        // Update the message to remove uploading state
         setCurrentConv(prev => ({
           ...prev,
           messages: prev.messages.map(msg => 
@@ -866,127 +930,116 @@ function App() {
     }
   };
 
-  //qrcode
   const downloadQRCode = async () => {
-  if (!myLinkId || generatingQR) return;
-  
-  setGeneratingQR(true);
-  
-  try {
-    const fullLink = `${window.location.origin}/?link=${myLinkId}`;
+    if (!myLinkId || generatingQR) return;
     
-    // Create canvas for QR code with branding
-    const canvas = document.createElement('canvas');
-    canvas.width = 800;
-    canvas.height = 920;
-    const ctx = canvas.getContext('2d');
+    setGeneratingQR(true);
     
-    // White background
-    ctx.fillStyle = '#ffffff';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-    
-    // Create QR Code with custom styling
-    const qrCode = new QRCodeStyling({
-      width: 700,
-      height: 700,
-      data: fullLink,
-      margin: 20,
-      qrOptions: {
-        typeNumber: 0,
-        mode: 'Byte',
-        errorCorrectionLevel: 'H'
-      },
-      imageOptions: {
-        hideBackgroundDots: true,
-        imageSize: 0.3,
-        margin: 8
-      },
-      dotsOptions: {
-        type: 'rounded',
-        color: '#4169E1',
-        gradient: {
-          type: 'linear',
-          rotation: 0,
-          colorStops: [
-            { offset: 0, color: '#667eea' },
-            { offset: 1, color: '#764ba2' }
-          ]
-        }
-      },
-      backgroundOptions: {
-        color: '#ffffff'
-      },
-      cornersSquareOptions: {
-        type: 'extra-rounded',
-        color: '#667eea'
-      },
-      cornersDotOptions: {
-        type: 'dot',
-        color: '#764ba2'
-      }
-    });
-    
-    // Get QR code as blob
-    const qrBlob = await qrCode.getRawData('png');
-    const qrImage = await createImageBitmap(qrBlob);
-    
-    // Draw QR code centered
-    ctx.drawImage(qrImage, 50, 80, 700, 700);
-    
-    // Add rounded rectangle background for branding
-    const brandingY = 800;
-    const brandingHeight = 100;
-    ctx.fillStyle = '#f8f9ff';
-    roundRect(ctx, 50, brandingY, 700, brandingHeight, 15);
-    ctx.fill();
-    
-    // Add "Ochat.fun" text
-    ctx.fillStyle = '#667eea';
-    ctx.font = 'bold 48px Inter, -apple-system, sans-serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText('Ochat.fun', 400, brandingY + 35);
-    
-    // Add copyright text
-    ctx.fillStyle = '#999';
-    ctx.font = '24px Inter, -apple-system, sans-serif';
-    ctx.fillText('Scan to chat privately', 400, brandingY + 72);
-    
-    // Convert to blob and download
-    canvas.toBlob((blob) => {
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `ochat-qr-${myLinkId}.png`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
+    try {
+      const fullLink = `${window.location.origin}/?link=${myLinkId}`;
       
+      const canvas = document.createElement('canvas');
+      canvas.width = 800;
+      canvas.height = 920;
+      const ctx = canvas.getContext('2d');
+      
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      
+      const qrCode = new QRCodeStyling({
+        width: 700,
+        height: 700,
+        data: fullLink,
+        margin: 20,
+        qrOptions: {
+          typeNumber: 0,
+          mode: 'Byte',
+          errorCorrectionLevel: 'H'
+        },
+        imageOptions: {
+          hideBackgroundDots: true,
+          imageSize: 0.3,
+          margin: 8
+        },
+        dotsOptions: {
+          type: 'rounded',
+          color: '#4169E1',
+          gradient: {
+            type: 'linear',
+            rotation: 0,
+            colorStops: [
+              { offset: 0, color: '#667eea' },
+              { offset: 1, color: '#764ba2' }
+            ]
+          }
+        },
+        backgroundOptions: {
+          color: '#ffffff'
+        },
+        cornersSquareOptions: {
+          type: 'extra-rounded',
+          color: '#667eea'
+        },
+        cornersDotOptions: {
+          type: 'dot',
+          color: '#764ba2'
+        }
+      });
+      
+      const qrBlob = await qrCode.getRawData('png');
+      const qrImage = await createImageBitmap(qrBlob);
+      
+      ctx.drawImage(qrImage, 50, 80, 700, 700);
+      
+      const brandingY = 800;
+      const brandingHeight = 100;
+      ctx.fillStyle = '#f8f9ff';
+      roundRect(ctx, 50, brandingY, 700, brandingHeight, 15);
+      ctx.fill();
+      
+      ctx.fillStyle = '#667eea';
+      ctx.font = 'bold 48px Inter, -apple-system, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('Ochat.fun', 400, brandingY + 35);
+      
+      ctx.fillStyle = '#999';
+      ctx.font = '24px Inter, -apple-system, sans-serif';
+      ctx.fillText('Scan to chat privately', 400, brandingY + 72);
+      
+      canvas.toBlob((blob) => {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `ochat-qr-${myLinkId}.png`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        
+        setGeneratingQR(false);
+      }, 'image/png');
+      
+    } catch (error) {
+      console.error('Error generating QR code:', error);
+      alert('Failed to generate QR code');
       setGeneratingQR(false);
-    }, 'image/png');
-    
-  } catch (error) {
-    console.error('Error generating QR code:', error);
-    alert('Failed to generate QR code');
-    setGeneratingQR(false);
-  }
-};
+    }
+  };
 
-// Helper function to draw rounded rectangle
-const roundRect = (ctx, x, y, width, height, radius) => {
-  ctx.beginPath();
-  ctx.moveTo(x + radius, y);
-  ctx.lineTo(x + width - radius, y);
-  ctx.quadraticCurveTo(x + width, y, x + width, y + radius);
-  ctx.lineTo(x + width, y + height - radius);
-  ctx.quadraticCurveTo(x + width, y + height, x + width - radius, y + height);
-  ctx.lineTo(x + radius, y + height);
-  ctx.quadraticCurveTo(x, y + height, x, y + height - radius);
-  ctx.lineTo(x, y + radius);
-  ctx.quadraticCurveTo(x, y, x + radius, y);
-  ctx.closePath();
-};
+  const roundRect = (ctx, x, y, width, height, radius) => {
+    ctx.beginPath();
+    ctx.moveTo(x + radius, y);
+    ctx.lineTo(x + width - radius, y);
+    ctx.quadraticCurveTo(x + width, y, x + width, y + radius);
+    ctx.lineTo(x + width, y + height - radius);
+    ctx.quadraticCurveTo(x + width, y + height, x + width - radius, y + height);
+    ctx.lineTo(x + radius, y + height);
+    ctx.quadraticCurveTo(x, y + height, x, y + height - radius);
+    ctx.lineTo(x, y + radius);
+    ctx.quadraticCurveTo(x, y, x + radius, y);
+    ctx.closePath();
+  };
 
   const copyToClipboardFallback = (text) => {
     const textArea = document.createElement('textarea');
@@ -1015,6 +1068,15 @@ const roundRect = (ctx, x, y, width, height, radius) => {
       setReplyingTo(null);
       window.history.pushState({}, '', `/?creator=${myLinkId}`);
     } else {
+      // ✅ BRIDGE CALL 7: User navigating away — unsubscribe to stop notifications
+      // while they are not in any active chat/link view
+      if (activeConvId && !isCreator) {
+        flutterUnsubscribeConv(activeConvId);
+      }
+      if (myLinkId && isCreator) {
+        flutterUnsubscribeLink(myLinkId);
+      }
+
       setView('home');
       setMyLinkId(null);
       setMyCreatorId(null);
@@ -1061,19 +1123,16 @@ const roundRect = (ctx, x, y, width, height, radius) => {
     const file = e.target.files[0];
     if (!file) return;
 
-    // Validate file type
     if (!ALLOWED_IMAGE_TYPES.includes(file.type)) {
       alert('Please select a valid image file (JPEG, PNG, GIF, or WebP)');
       return;
     }
 
-    // Validate file size
     if (file.size > MAX_IMAGE_SIZE) {
       alert('Image size must be less than 5MB');
       return;
     }
 
-    // Read and convert to base64
     const reader = new FileReader();
     reader.onloadend = () => {
       const base64String = reader.result;
@@ -1222,30 +1281,30 @@ const roundRect = (ctx, x, y, width, height, radius) => {
           </div>
           
           <div className="link-section">
-  <div className="link-info">
-    <span className="link-label">SHARE THIS LINK</span>
-    <span className="link-id">{myLinkId}</span>
-  </div>
-  <div className="link-buttons">
-    <button onClick={copyLink} className="copy-button">
-      {copied ? <Check size={16} /> : <Copy size={16} />}
-      <span>{copied ? 'Copied!' : 'Copy'}</span>
-    </button>
-    <button 
-      onClick={downloadQRCode} 
-      className="qr-button"
-      disabled={generatingQR}
-      title="Download QR Code"
-    >
-      {generatingQR ? (
-        <div className="spinner-small"></div>
-      ) : (
-        <Download size={16} />
-      )}
-      <span>{generatingQR ? 'Generating...' : 'QR'}</span>
-    </button>
-  </div>
-</div>
+            <div className="link-info">
+              <span className="link-label">SHARE THIS LINK</span>
+              <span className="link-id">{myLinkId}</span>
+            </div>
+            <div className="link-buttons">
+              <button onClick={copyLink} className="copy-button">
+                {copied ? <Check size={16} /> : <Copy size={16} />}
+                <span>{copied ? 'Copied!' : 'Copy'}</span>
+              </button>
+              <button 
+                onClick={downloadQRCode} 
+                className="qr-button"
+                disabled={generatingQR}
+                title="Download QR Code"
+              >
+                {generatingQR ? (
+                  <div className="spinner-small"></div>
+                ) : (
+                  <Download size={16} />
+                )}
+                <span>{generatingQR ? 'Generating...' : 'QR'}</span>
+              </button>
+            </div>
+          </div>
 
           <div className="conversation-list">
             {conversations.length === 0 ? (
@@ -1487,7 +1546,6 @@ function SwipeableMessage({ msg, isOwn, onSwipeReply, onImageClick, formatTime, 
     currentX.current = clientX;
     const diff = clientX - startX.current;
     
-    // Allow swipe left for own messages, right for others
     if ((isOwn && diff < 0) || (!isOwn && diff > 0)) {
       setOffset(Math.min(Math.abs(diff), SWIPE_THRESHOLD));
     }
@@ -1503,31 +1561,12 @@ function SwipeableMessage({ msg, isOwn, onSwipeReply, onImageClick, formatTime, 
     setOffset(0);
   };
 
-  const handleTouchStart = (e) => {
-    handleStart(e.touches[0].clientX);
-  };
-
-  const handleTouchMove = (e) => {
-    handleMove(e.touches[0].clientX);
-  };
-
-  const handleMouseDown = (e) => {
-    handleStart(e.clientX);
-  };
-
-  const handleMouseMove = (e) => {
-    handleMove(e.clientX);
-  };
-
-  const handleMouseUp = () => {
-    handleEnd();
-  };
-
-  const handleMouseLeave = () => {
-    if (isDragging) {
-      handleEnd();
-    }
-  };
+  const handleTouchStart = (e) => handleStart(e.touches[0].clientX);
+  const handleTouchMove = (e) => handleMove(e.touches[0].clientX);
+  const handleMouseDown = (e) => handleStart(e.clientX);
+  const handleMouseMove = (e) => handleMove(e.clientX);
+  const handleMouseUp = () => handleEnd();
+  const handleMouseLeave = () => { if (isDragging) handleEnd(); };
 
   const transform = isOwn ? `translateX(-${offset}px)` : `translateX(${offset}px)`;
   const opacity = Math.min(offset / SWIPE_THRESHOLD, 1);
@@ -1535,27 +1574,16 @@ function SwipeableMessage({ msg, isOwn, onSwipeReply, onImageClick, formatTime, 
   return (
     <div
       className="message-wrapper"
-      style={{
-        justifyContent: isOwn ? 'flex-end' : 'flex-start'
-      }}
+      style={{ justifyContent: isOwn ? 'flex-end' : 'flex-start' }}
     >
       <div className="swipeable-message-container">
-        {/* Reply icon - shows on swipe */}
         {!isOwn && offset > 20 && (
-          <div 
-            className="swipe-reply-icon swipe-reply-icon-left"
-            style={{ opacity }}
-          >
-            ↩
-          </div>
+          <div className="swipe-reply-icon swipe-reply-icon-left" style={{ opacity }}>↩</div>
         )}
         
         <div
           className="swipeable-message-content"
-          style={{
-            transform,
-            transition: isDragging ? 'none' : 'transform 0.3s ease'
-          }}
+          style={{ transform, transition: isDragging ? 'none' : 'transform 0.3s ease' }}
           onTouchStart={handleTouchStart}
           onTouchMove={handleTouchMove}
           onTouchEnd={handleEnd}
@@ -1603,14 +1631,8 @@ function SwipeableMessage({ msg, isOwn, onSwipeReply, onImageClick, formatTime, 
           </div>
         </div>
 
-        {/* Reply icon - shows on swipe */}
         {isOwn && offset > 20 && (
-          <div 
-            className="swipe-reply-icon swipe-reply-icon-right"
-            style={{ opacity }}
-          >
-            ↩
-          </div>
+          <div className="swipe-reply-icon swipe-reply-icon-right" style={{ opacity }}>↩</div>
         )}
       </div>
     </div>
