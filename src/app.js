@@ -1,6 +1,6 @@
 // src/App.js - Fixed version with proper real-time messaging and swipe to reply
 import React, { useState, useEffect, useRef } from 'react';
-import { MessageCircle, Send, Copy, Check, Plus, User, List, X, Image as ImageIcon, Paperclip, Download } from 'lucide-react';
+import { MessageCircle, Send, Copy, Check, Plus, User, List, X, Paperclip, Download } from 'lucide-react';
 import QRCodeStyling from 'qr-code-styling';
 import io from 'socket.io-client';
 import axios from 'axios';
@@ -65,14 +65,19 @@ const flutterUnsubscribeLink = (linkId) => {
 function App() {
   const [view, setView] = useState('loading');
   const [myLinkId, setMyLinkId] = useState(null);
-  const [myCreatorId, setMyCreatorId] = useState(null);
+  const [, setMyCreatorId] = useState(null);
   const [activeConvId, setActiveConvId] = useState(null);
+  const activeConvIdRef = useRef(null);
+  const isCreatorRef = useRef(false);
   const [joinLinkId, setJoinLinkId] = useState('');
   const [conversations, setConversations] = useState([]);
   const [currentConv, setCurrentConv] = useState(null);
   const [message, setMessage] = useState('');
   const [copied, setCopied] = useState(false);
   const [isCreator, setIsCreator] = useState(false);
+  // Keep refs in sync so socket handlers always see latest values without re-registering
+  useEffect(() => { activeConvIdRef.current = activeConvId; }, [activeConvId]);
+  useEffect(() => { isCreatorRef.current = isCreator; }, [isCreator]);
   const [typingUser, setTypingUser] = useState(null);
   const [loading, setLoading] = useState(false);
   const [socketConnected, setSocketConnected] = useState(false);
@@ -160,11 +165,11 @@ function App() {
       console.log('🔄 Reconnected after', attemptNumber, 'attempts');
       setSocketConnected(true);
       
-      if (activeConvId) {
-        console.log('♻️ Rejoining conversation:', activeConvId);
+      if (activeConvIdRef.current) {
+        console.log('♻️ Rejoining conversation:', activeConvIdRef.current);
         socket.emit('join-conversation', { 
-          convId: activeConvId, 
-          isCreator 
+          convId: activeConvIdRef.current, 
+          isCreator: isCreatorRef.current
         });
       }
     });
@@ -203,7 +208,7 @@ function App() {
     };
     
     initializeApp();
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const loadMyLinks = () => {
     try {
@@ -555,7 +560,7 @@ function App() {
       socket.off('new-conversation', handleNewConversation);
       socket.off('conversation-updated', handleConversationUpdated);
     };
-  }, [socket, myLinkId, view, activeConvId]);
+  }, [socket, myLinkId, view, activeConvId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Auto scroll to bottom
   useEffect(() => {
