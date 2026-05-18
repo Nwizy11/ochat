@@ -1263,7 +1263,7 @@ function App() {
             <p className="feature">💬 Real-time messaging</p>
             <p className="feature">🚀 No account needed</p>
             <p className="feature"><a href="https://ochat.fun/about.html">📃 More about Ochat </a></p>
-            <p className="feature"><a>💬 Mail Us: ndubuisipeter7@gmail.com </a></p>
+            <p className="feature">💬 Mail Us: ndubuisipeter7@gmail.com</p>
             
           </div>
         </div>
